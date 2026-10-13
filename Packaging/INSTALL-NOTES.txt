@@ -1,0 +1,28 @@
+DRUM BREAKER by HIDDEN AUDIO
+
+Windows 10/11, 64-bit VST3 instrument
+
+Close your DAW and the standalone app before installation or updating.
+The VST3 instrument installs to the system's Common Files\VST3 folder.
+Scan for new plugins in your DAW, then load Drum Breaker as an instrument.
+The standalone app and desktop shortcut are optional installer selections.
+
+ACTIVATION
+A valid DrumBreaker Lemon Squeezy key and internet access are required for
+activation and startup verification. Playback and WAV export remain locked
+until verification succeeds. There is no offline grace period.
+
+Activation is stored for the current Windows user in Credential Manager.
+Updates and uninstall do not remove that record or use a new activation slot.
+Uninstall does not deactivate a license in Lemon Squeezy.
+
+PROJECTS AND EXPORTS
+Keep original sample files at their saved locations; project state currently
+references them rather than embedding the audio. Existing samples, DAW projects,
+user settings, and exported WAV files are not removed by this installer.
+
+EXPORT TO PLAYLIST renders a WAV drag handle. Drag that file into your DAW's
+timeline; the plugin does not automatically create a host track or insert a clip.
+
+SUPPORT
+https://hiddenaudiofx.com

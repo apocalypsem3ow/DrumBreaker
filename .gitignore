@@ -1,0 +1,38 @@
+# 1. Build Folders & Outputs
+build/
+builds/
+out/
+dist/
+CMakeCache.txt
+CMakeFiles/
+_deps/
+
+# 2. Logs
+cfg_log.txt
+build_log.txt
+
+# 3. Compiled Plugins & Executables
+*.exe
+*.dll
+*.vst3
+*.aax
+*.component
+*.obj
+*.lib
+
+# 4. Installer Outputs (Inno Setup)
+Output/
+*.iss.local
+
+# 5. Visual Studio Code / IDE settings
+.vscode/
+.vs/
+*.user
+
+# 6. OS Junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 7. Frameworks & Dependencies
+JUCE/
