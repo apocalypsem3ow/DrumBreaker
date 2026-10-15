@@ -1,5 +1,6 @@
 #include "WaveformEditor.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace drumbreaker
@@ -83,6 +84,13 @@ void WaveformEditor::setData (BreakData::Ptr newData)
     dragEntry = -1;
     scrollSamples = 0.0;
     zoom = 1.0;
+    scaleLength = data != nullptr ? (double) data->totalLength : 0.0;
+    if (compactMode && data != nullptr && ! data->arrangement.empty())
+    {
+        const int firstSlice = data->arrangement.front();
+        if (juce::isPositiveAndBelow (firstSlice, (int) data->slices.size()))
+            scaleLength = (double) data->slices[(size_t) firstSlice].length();
+    }
     updateScrollBar();
     repaint();
 }
@@ -120,6 +128,95 @@ void WaveformEditor::setStatusMessage (const juce::String& message)
     repaint();
 }
 
+void WaveformEditor::setSelected (bool shouldBeSelected)
+{
+    if (selected != shouldBeSelected)
+    {
+        selected = shouldBeSelected;
+        repaint();
+    }
+}
+
+void WaveformEditor::setCompactMode (bool shouldBeCompact)
+{
+    if (compactMode != shouldBeCompact)
+    {
+        compactMode = shouldBeCompact;
+        resized();
+        repaint();
+    }
+}
+
+void WaveformEditor::setFixedPixelsPerSample (double pps)
+{
+    pps = juce::jmax (0.0, pps);
+    if (juce::approximatelyEqual (fixedPixelsPerSample, pps))
+        return;
+    fixedPixelsPerSample = pps;
+    repaint();
+    updateScrollBar();
+}
+
+int WaveformEditor::getPreferredContentWidth (double samples, int minimumWidth, int maximumWidth) const
+{
+    const auto area = waveArea();
+    const double pps = pixelsPerSample();
+    const int horizontalInsets = juce::roundToInt ((float) getWidth() - area.getWidth());
+    return juce::jlimit (minimumWidth, maximumWidth,
+                         juce::roundToInt ((float) juce::jmax (0.0, samples) * (float) pps)
+                             + horizontalInsets);
+}
+
+void WaveformEditor::setIncomingFragment (BreakData::Ptr source, int sliceIndex, float x)
+{
+    if (source == nullptr || data == nullptr || source->audio != data->audio
+        || ! juce::isPositiveAndBelow (sliceIndex, (int) source->slices.size()))
+    {
+        clearIncomingFragment();
+        return;
+    }
+
+    const bool wasIncoming = hasIncoming();
+    const int newIndex = insertionIndexFor (x);
+    if (wasIncoming && incomingData == source && incomingSlice == sliceIndex && incomingIndex == newIndex)
+        return;
+
+    incomingData = std::move (source);
+    incomingSlice = sliceIndex;
+    incomingIndex = newIndex;
+    if (! wasIncoming)
+        updateScrollBar();
+    repaint();
+}
+
+void WaveformEditor::clearIncomingFragment()
+{
+    if (incomingData != nullptr)
+    {
+        incomingData = nullptr;
+        incomingSlice = -1;
+        incomingIndex = -1;
+        updateScrollBar();
+        repaint();
+    }
+}
+
+bool WaveformEditor::hasIncoming() const
+{
+    return incomingData != nullptr && data != nullptr && incomingData->audio == data->audio
+        && juce::isPositiveAndBelow (incomingSlice, (int) incomingData->slices.size());
+}
+
+double WaveformEditor::getIncomingLength() const
+{
+    return hasIncoming() ? (double) incomingData->slices[(size_t) incomingSlice].length() : 0.0;
+}
+
+double WaveformEditor::contentLength() const
+{
+    return (data != nullptr ? (double) data->totalLength : 0.0) + getIncomingLength();
+}
+
 //==============================================================================
 juce::Rectangle<float> WaveformEditor::waveArea() const
 {
@@ -128,13 +225,16 @@ juce::Rectangle<float> WaveformEditor::waveArea() const
 
 double WaveformEditor::pixelsPerSample() const
 {
-    if (data == nullptr || data->totalLength <= 0)
+    if (data == nullptr || (data->totalLength <= 0 && fixedPixelsPerSample <= 0.0))
         return 0.0;
 
-    return (double) waveArea().getWidth() * zoom / (double) data->totalLength;
+    if (fixedPixelsPerSample > 0.0)
+        return fixedPixelsPerSample * zoom;
+
+    return (double) waveArea().getWidth() * zoom / juce::jmax (1.0, scaleLength);
 }
 
-juce::Rectangle<float> WaveformEditor::boundsForEntry (int entryIndex) const
+juce::Rectangle<float> WaveformEditor::baseBoundsForEntry (int entryIndex) const
 {
     if (data == nullptr || ! juce::isPositiveAndBelow (entryIndex, (int) data->starts.size()))
         return {};
@@ -147,6 +247,17 @@ juce::Rectangle<float> WaveformEditor::boundsForEntry (int entryIndex) const
     const float w = (float) ((double) slice.length() * pps);
 
     return { x, area.getY(), juce::jmax (1.0f, w), area.getHeight() };
+}
+
+juce::Rectangle<float> WaveformEditor::boundsForEntry (int entryIndex) const
+{
+    auto bounds = baseBoundsForEntry (entryIndex);
+
+    // Entries after a hovering fragment slide right to open a gap for it.
+    if (hasIncoming() && entryIndex >= incomingIndex)
+        bounds.translate ((float) (getIncomingLength() * pixelsPerSample()), 0.0f);
+
+    return bounds;
 }
 
 int WaveformEditor::entryAt (juce::Point<float> position) const
@@ -168,7 +279,7 @@ int WaveformEditor::insertionIndexFor (float x) const
 
     for (int i = 0; i < (int) data->starts.size(); ++i)
     {
-        const auto b = boundsForEntry (i);
+        const auto b = baseBoundsForEntry (i);
 
         if (x < b.getCentreX())
             return i;
@@ -186,7 +297,8 @@ void WaveformEditor::resized()
 
 void WaveformEditor::updateScrollBar()
 {
-    if (data == nullptr || data->totalLength <= 0)
+    const double totalLength = contentLength();
+    if (data == nullptr || totalLength <= 0.0)
     {
         ignoreScrollCallback = true;
         scrollBar.setRangeLimits (0.0, 1.0, juce::dontSendNotification);
@@ -195,11 +307,12 @@ void WaveformEditor::updateScrollBar()
         return;
     }
 
-    const double visible = (double) data->totalLength / zoom;
-    scrollSamples = juce::jlimit (0.0, juce::jmax (0.0, (double) data->totalLength - visible), scrollSamples);
+    const double pps = pixelsPerSample();
+    const double visible = pps > 0.0 ? (double) waveArea().getWidth() / pps : scaleLength / zoom;
+    scrollSamples = juce::jlimit (0.0, juce::jmax (0.0, totalLength - visible), scrollSamples);
 
     ignoreScrollCallback = true;
-    scrollBar.setRangeLimits (0.0, (double) data->totalLength, juce::dontSendNotification);
+    scrollBar.setRangeLimits (0.0, totalLength, juce::dontSendNotification);
     scrollBar.setCurrentRange (scrollSamples, visible, juce::dontSendNotification);
     ignoreScrollCallback = false;
 }
@@ -215,7 +328,7 @@ void WaveformEditor::scrollBarMoved (juce::ScrollBar*, double newRangeStart)
 
 void WaveformEditor::zoomAround (float mouseX, double factor)
 {
-    if (data == nullptr || data->totalLength <= 0)
+    if (data == nullptr || (data->totalLength <= 0 && incomingData == nullptr))
         return;
 
     const auto area = waveArea();
@@ -228,7 +341,7 @@ void WaveformEditor::zoomAround (float mouseX, double factor)
 
     zoom = juce::jlimit (1.0, 400.0, zoom * factor);
 
-    const double newPps = (double) area.getWidth() * zoom / (double) data->totalLength;
+    const double newPps = pixelsPerSample();
     scrollSamples = sampleUnderMouse - (double) (mouseX - area.getX()) / newPps;
 
     updateScrollBar();
@@ -296,13 +409,13 @@ void WaveformEditor::drawWaveformInto (juce::Graphics& g, const Slice& slice,
 }
 
 void WaveformEditor::drawFragment (juce::Graphics& g, int entryIndex, juce::Rectangle<float> area,
-                                   float alpha, bool selected) const
+                                   float alpha, bool entrySelected) const
 {
     if (data == nullptr || ! juce::isPositiveAndBelow (entryIndex, (int) data->arrangement.size()))
         return;
 
     const auto& slice = data->slices[(size_t) data->arrangement[(size_t) entryIndex]];
-    const bool hot = selected || entryIndex == hoveredEntry;
+    const bool hot = entrySelected || entryIndex == hoveredEntry;
 
     juce::Path shape;
     shape.addRoundedRectangle (area.reduced (1.0f), 3.0f);
@@ -369,10 +482,10 @@ void WaveformEditor::paint (juce::Graphics& g)
         }
     }
 
-    if (data == nullptr || data->totalLength <= 0)
+    if (data == nullptr || (data->totalLength <= 0 && ! hasIncoming()))
     {
         g.setColour (dragHighlight ? emerald::accentBright : emerald::textDim);
-        g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
+        g.setFont (juce::Font (juce::FontOptions (compactMode ? 10.0f : 18.0f, juce::Font::bold)));
         g.drawText (statusMessage, bounds, juce::Justification::centred, false);
     }
     else
@@ -391,6 +504,27 @@ void WaveformEditor::paint (juce::Graphics& g)
                 continue;
 
             drawFragment (g, i, b, 1.0f, i == selectedEntry);
+        }
+
+        if (hasIncoming())
+        {
+            const int insertAt = juce::jlimit (0, (int) data->starts.size(), incomingIndex);
+            const double pps = pixelsPerSample();
+            const auto& slice = incomingData->slices[(size_t) incomingSlice];
+            const float x = insertAt < (int) data->starts.size() ? baseBoundsForEntry (insertAt).getX()
+                : data->starts.empty() ? area.getX() - (float) (scrollSamples * pps)
+                : baseBoundsForEntry ((int) data->starts.size() - 1).getRight();
+            juce::Rectangle<float> ghostArea (x, area.getY(), juce::jmax (1.0f, (float) (slice.length() * pps)),
+                                              area.getHeight());
+            juce::Path ghostShape;
+            ghostShape.addRoundedRectangle (ghostArea.reduced (1.0f), 3.0f);
+            g.setColour (emerald::accent.withAlpha (0.14f));
+            g.fillPath (ghostShape);
+            drawWaveformInto (g, slice, ghostArea.reduced (2.0f),
+                              emerald::accentBright.withAlpha (0.45f));
+            EmeraldLookAndFeel::drawGlow (g, ghostShape, emerald::accentBright, 0.8f);
+            g.setColour (emerald::accentBright.withAlpha (0.75f));
+            g.strokePath (ghostShape, juce::PathStrokeType (1.5f));
         }
 
         // drop indicator
@@ -423,6 +557,7 @@ void WaveformEditor::paint (juce::Graphics& g)
     }
 
     // BPM badge, top left of the visualiser
+    if (! compactMode)
     {
         const juce::Rectangle<float> badge (area.getX() + 4.0f, area.getY() + 4.0f, 120.0f, 40.0f);
 
@@ -454,8 +589,17 @@ void WaveformEditor::paint (juce::Graphics& g)
         }
     }
 
-    g.setColour ((dragHighlight ? emerald::accentBright : emerald::accent).withAlpha (dragHighlight ? 0.95f : 0.35f));
-    g.drawRoundedRectangle (bounds.reduced (0.5f), 8.0f, dragHighlight ? 2.0f : 1.0f);
+    const auto outline = selected ? emerald::accentBright : (dragHighlight ? emerald::accentBright : emerald::accent);
+    const float outlineAlpha = selected ? 0.95f : (dragHighlight ? 0.95f : 0.35f);
+    g.setColour (outline.withAlpha (outlineAlpha));
+    if (selected)
+    {
+        juce::Path glow;
+        glow.addRoundedRectangle (bounds.reduced (1.0f), compactMode ? 4.0f : 8.0f);
+        EmeraldLookAndFeel::drawGlow (g, glow, emerald::accent, 0.8f);
+    }
+    g.drawRoundedRectangle (bounds.reduced (0.5f), compactMode ? 4.0f : 8.0f,
+                            dragHighlight || selected ? 2.0f : 1.0f);
 }
 
 //==============================================================================
@@ -482,6 +626,8 @@ void WaveformEditor::mouseExit (const juce::MouseEvent&)
 void WaveformEditor::mouseDown (const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
+    if (onSelected != nullptr)
+        onSelected();
 
     const int entry = entryAt (e.position);
     selectedEntry = entry;
@@ -590,6 +736,18 @@ void WaveformEditor::mouseDrag (const juce::MouseEvent& e)
         repaint();
     }
 
+    if (onFragmentDragged != nullptr)
+    {
+        auto* top = getTopLevelComponent();
+        if (top != nullptr)
+        {
+            const bool magnetised = onFragmentDragged (data, data->arrangement[(size_t) dragEntry],
+                                                        top->getLocalPoint (this, e.position).toInt());
+            if (ghost != nullptr)
+                ghost->setVisible (! magnetised);
+        }
+    }
+
     // auto-scroll when dragging against the edges of a zoomed-in view
     if (zoom > 1.0)
     {
@@ -604,16 +762,40 @@ void WaveformEditor::mouseDrag (const juce::MouseEvent& e)
     }
 }
 
-void WaveformEditor::mouseUp (const juce::MouseEvent&)
+void WaveformEditor::mouseUp (const juce::MouseEvent& e)
 {
     if (dragEntry >= 0)
-        finishDrag();
+        finishDrag (e);
 }
 
-void WaveformEditor::finishDrag()
+void WaveformEditor::finishDrag (const juce::MouseEvent& e)
 {
     if (data == nullptr || dragEntry < 0)
         return;
+
+    // Drop before clearing the hover preview: the preview temporarily widens the
+    // target display and the release point must be tested against that width.
+    bool dropped = false;
+    if (draggingOutside && onFragmentDropped != nullptr)
+    {
+        auto* top = getTopLevelComponent();
+        dropped = top != nullptr && onFragmentDropped (data, data->arrangement[(size_t) dragEntry],
+                                                       top->getLocalPoint (this, e.position).toInt());
+    }
+
+    if (onFragmentDragged != nullptr)
+        onFragmentDragged (nullptr, -1, {});
+
+    if (dropped)
+    {
+        dragEntry = -1;
+        dropIndex = -1;
+        draggingOutside = false;
+        if (ghost != nullptr)
+            ghost->setVisible (false);
+        repaint();
+        return;
+    }
 
     auto order = data->arrangement;
 
@@ -642,6 +824,8 @@ void WaveformEditor::finishDrag()
     if (order != data->arrangement)
     {
         data = data->withArrangement (order);
+        if (! compactMode && fixedPixelsPerSample <= 0.0)
+            scaleLength = (double) data->totalLength;
 
         if (onArrangementChanged != nullptr)
             onArrangementChanged (order);
@@ -690,6 +874,11 @@ void WaveformEditor::commitArrangement()
     if (data == nullptr)
         return;
 
+    if (! compactMode && fixedPixelsPerSample <= 0.0)
+        scaleLength = (double) data->totalLength;
+    else if (data->totalLength <= 0)
+        scaleLength = 0.0;
+
     updateScrollBar();
 
     if (onArrangementChanged != nullptr)
@@ -724,6 +913,44 @@ void WaveformEditor::duplicateEntry (int entryIndex)
     order.insert (order.begin() + entryIndex, order[(size_t) entryIndex]);
 
     data = data->withArrangement (order);
+    commitArrangement();
+}
+
+void WaveformEditor::addFragmentFrom (BreakData::Ptr source, int sliceIndex, float x)
+{
+    if (data == nullptr || source == nullptr || source->audio != data->audio
+        || ! juce::isPositiveAndBelow (sliceIndex, (int) source->slices.size()))
+        return;
+
+    const auto slice = source->slices[(size_t) sliceIndex];
+    const int insertAt = insertionIndexFor (x);
+    incomingData = nullptr;
+    incomingSlice = -1;
+    incomingIndex = -1;
+    auto found = std::find_if (data->slices.begin(), data->slices.end(), [&slice] (const Slice& existing)
+    {
+        return existing.start == slice.start && existing.end == slice.end;
+    });
+
+    std::vector<int> order = data->arrangement;
+    int destinationSlice = -1;
+    if (found != data->slices.end())
+    {
+        destinationSlice = (int) std::distance (data->slices.begin(), found);
+        order.insert (order.begin() + insertAt, destinationSlice);
+        data = data->withArrangement (order);
+    }
+    else
+    {
+        destinationSlice = (int) data->slices.size();
+        order.insert (order.begin() + insertAt, destinationSlice);
+        data = data->withSliceAndArrangement (slice, order);
+    }
+
+    if (scaleLength <= 0.0)
+        scaleLength = (double) slice.length();
+
+    selectedEntry = insertAt;
     commitArrangement();
 }
 

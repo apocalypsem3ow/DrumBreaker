@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; media-src blob:; base-uri 'none'">
+<title>Hidden Audio logo intro</title>
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+video { width: 100%; height: 100%; object-fit: cover; display: block; }
+#controls { position: fixed; top: 12px; left: 12px; display: flex; gap: 8px;
+    opacity: 0; pointer-events: none; }
+#controls.visible, #controls:focus-within { opacity: 1; pointer-events: auto; }
+button { background: rgba(0, 0, 0, .8); color: #fff; border: 1px solid #aaa;
+    border-radius: 4px; min-height: 36px; padding: 0 12px; font: bold 12px sans-serif;
+    cursor: pointer; }
+button:hover, button:focus-visible { border-color: #6fffb3; color: #6fffb3; }
+</style>
+</head>
+<body>
+<video id="video" muted playsinline preload="auto" disablepictureinpicture></video>
+<div id="controls">
+    <button id="close" type="button" aria-label="Skip logo intro">X</button>
+    <button id="mute" type="button" aria-label="Enable intro sound" aria-pressed="true">VOLUME: MUTED</button>
+</div>
+<script>
+'use strict';
+const video = document.getElementById('video');
+const controls = document.getElementById('controls');
+const mute = document.getElementById('mute');
+let finished = false;
+let objectURL;
+function notify(event, value) {
+    if (window.__JUCE__ && window.__JUCE__.backend)
+        window.__JUCE__.backend.emitEvent(event, value);
+}
+function finish(error = '') {
+    if (finished) return;
+    finished = true;
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    if (objectURL) URL.revokeObjectURL(objectURL);
+    notify('introFinished', error);
+}
+document.addEventListener('pointermove', () => controls.classList.add('visible'));
+document.addEventListener('pointerover', () => controls.classList.add('visible'));
+document.documentElement.addEventListener('pointerleave', () => controls.classList.remove('visible'));
+document.addEventListener('pointerdown', event => {
+    if (!mute.contains(event.target)) {
+        event.preventDefault();
+        finish();
+    }
+});
+document.getElementById('close').addEventListener('click', () => finish());
+function setMuted(muted) {
+    video.muted = muted;
+    mute.textContent = muted ? 'VOLUME: MUTED' : 'VOLUME: ON';
+    mute.setAttribute('aria-label', muted ? 'Enable intro sound' : 'Mute intro sound');
+    mute.setAttribute('aria-pressed', String(muted));
+}
+function soundRequested() {
+    const init = window.__JUCE__ && window.__JUCE__.initialisationData;
+    return !!(init && Array.isArray(init.introSound) && init.introSound[0] === true);
+}
+mute.addEventListener('click', event => {
+    event.stopPropagation();
+    setMuted(!video.muted);
+});
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') finish();
+});
+document.addEventListener('contextmenu', event => event.preventDefault());
+video.addEventListener('playing', () => notify('introPlaying', true));
+video.addEventListener('ended', () => finish());
+video.addEventListener('error', () => {
+    if (!finished) finish('The logo video could not be decoded.');
+});
+(async () => {
+    try {
+        const response = await fetch('LogoIntro.mp4');
+        if (!response.ok) throw new Error('The embedded logo video could not be loaded.');
+        const blob = await response.blob();
+        if (finished) return;
+        objectURL = URL.createObjectURL(blob);
+        video.src = objectURL;
+        // Muted by default; sound only plays straight after a successful activation.
+        setMuted(!soundRequested());
+        try {
+            await video.play();
+        } catch (playError) {
+            if (video.muted || finished) throw playError;
+            setMuted(true);
+            await video.play();
+        }
+    } catch (error) {
+        finish(error instanceof Error ? error.message : String(error));
+    }
+})();
+</script>
+</body>
+</html>

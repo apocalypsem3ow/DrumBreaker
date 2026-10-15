@@ -7,6 +7,7 @@
 #include "UI/WaveformEditor.h"
 #include "UI/XYPad.h"
 #include "UI/ActivationPanel.h"
+#include "UI/LogoIntro.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -68,7 +69,8 @@ class PianoRoll : public juce::MidiKeyboardComponent,
                   public juce::SettableTooltipClient
 {
 public:
-    using juce::MidiKeyboardComponent::MidiKeyboardComponent;
+    PianoRoll (juce::MidiKeyboardState&, Orientation);
+    static int noteForTypingKey (int keyCode) noexcept;
 };
 
 //==============================================================================
@@ -143,6 +145,10 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    bool keyPressed (const juce::KeyPress&) override;
+    bool keyStateChanged (bool isKeyDown) override;
+    void visibilityChanged() override;
+
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void fileDragEnter (const juce::StringArray&, int, int) override;
     void fileDragExit (const juce::StringArray&) override;
@@ -160,6 +166,8 @@ private:
     void startExport (OfflineExporter::Snapshot snapshot, const juce::File& destination, bool playlist);
     void loadFile (const juce::File&);
     void drawPanel (juce::Graphics&, juce::Rectangle<int>, const juce::String& title) const;
+    void layoutCustomWaveform();
+    void tryStartLogoIntro();
 
     DrumBreakerProcessor& processor;
 
@@ -169,6 +177,7 @@ private:
 
     ElectricLogo logo;
     WaveformEditor waveform;
+    WaveformEditor customWaveform;
     SpectrumDisplay spectrum { processor.spectrumTap, processor.apvts };
     EQLamp eqLamp { processor.apvts };
     EQLamp filterLamp { processor.apvts, true };
@@ -180,6 +189,7 @@ private:
     ActivationStatusButton activationButton { "ACTIVATE" };
     juce::TextButton breakButton  { "BREAK" };
     juce::TextButton restoreButton{ "RESTORE" };
+    juce::TextButton newBreakButton { "NEW BREAK" };
     juce::TextButton playButton   { "PLAY" };
     juce::TextButton exportButton { "EXPORT TO..." };
 
@@ -187,7 +197,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> presetAttachment;
 
     juce::ComboBox filterTypeBox;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> filterTypeAttachment;
+    std::unique_ptr<juce::ParameterAttachment> filterMotionAttachment;
 
     Knob reverbKnob, pitchKnob, sensitivityKnob, outputKnob;
     Knob driveKnob, mixKnob;
@@ -200,6 +210,9 @@ private:
     juce::ThreadPool exportWorker { 1 };
     bool exporting = false;
     ActivationPanel activationPanel { processor.getLicenseClient() };
+    LogoIntro logoIntro;
+    bool logoIntroAttempted = false;
+    bool logoIntroWithSound = false;
 
     juce::Rectangle<int> eqPanel, filterPanel, controlPanel;
     bool playButtonHeld = false;

@@ -35,10 +35,13 @@ juce::Result OfflineExporter::writeWav (const Snapshot& snapshot, const juce::Fi
     const double pitchRatio = std::pow (2.0, snapshot.pitchSemitones / 12.0);
     const double duration = (double) data->totalLength / data->sourceSampleRate / pitchRatio;
     double tail = snapshot.reverb > 0.0f ? 4.0 : 0.0;
-    if (snapshot.filterEnabled && snapshot.filterMix > 0.0f)
+    const bool centredFilter = ToneStack::isFilterPadCentred (snapshot.filter.cutoff, snapshot.filter.resonance)
+        && snapshot.modulation == 0.0f && snapshot.motion == ToneStack::FilterMotion::none;
+    if (snapshot.filterEnabled && snapshot.filterMix > 0.0f && ! centredFilter)
     {
         const double cutoff = snapshot.motion == ToneStack::FilterMotion::lowPassSweep
                               || snapshot.motion == ToneStack::FilterMotion::highPassSweep
+                              || snapshot.motion == ToneStack::FilterMotion::bandPassSweep
             ? 20.0 : juce::jmax (20.0, (double) snapshot.filter.cutoff);
         const double resonance = snapshot.motion == ToneStack::FilterMotion::resonanceModulation
             ? 3.5 : snapshot.filter.resonance;

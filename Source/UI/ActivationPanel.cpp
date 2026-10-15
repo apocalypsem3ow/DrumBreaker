@@ -90,7 +90,7 @@ void ActivationPanel::attemptActivation()
         statusLabel.setText ("Enter a license key first.", juce::dontSendNotification);
         return;
     }
-    client.activate (keyEditor.getText());
+    awaitingUserActivation = client.activate (keyEditor.getText());
     timerCallback();
 }
 
@@ -99,6 +99,12 @@ void ActivationPanel::timerCallback()
     const auto status = client.getStatus();
     busy = status.busy;
     verified = status.verified;
+    if (awaitingUserActivation && ! busy)
+    {
+        awaitingUserActivation = false;
+        if (verified && onActivated != nullptr)
+            onActivated();
+    }
     keyEditor.setEnabled (! busy);
     keyEditor.setReadOnly (verified);
     activateButton.setVisible (! verified);

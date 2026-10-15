@@ -15,8 +15,14 @@ them on a magnetic, snap-to-grid waveform playlist.
   still require an external reference. Silent/unusable audio displays `----`.
 - **Transient slicing** – the BREAK button cuts the loop just before each kick, snare, hat or fill.
 - **Zoomable / scrollable waveform** (scroll to move, Ctrl/Cmd + scroll to zoom) spanning the full width.
+- **Custom break display** - after BREAK, NEW BREAK reveals a horizontally centred display
+  below the original, with the same height and an initial width of one third. It grows
+  horizontally as fragments are added and stays centred when resized or reopened.
 - **Magnetic fragment dragging** – drag a piece anywhere, even off the display; a dimmed ghost
   follows the mouse and the fragment snaps back into the nearest slot on release.
+  Hovering a piece over the NEW BREAK display (including the first, empty drop) shows it
+  magnetised in place: later pieces slide aside to open a gap and the display temporarily
+  widens to fit it.
 - **Delete / duplicate fragments** (right-click or Delete). The timeline re-compacts so no
   silence is left in the display or in the rendered output.
 - **Monophonic, last-note-priority playback** with the fixed factory envelope
@@ -25,6 +31,14 @@ them on a magnetic, snap-to-grid waveform playlist.
   fractional pitch/rate positions are preserved, and sample-timed filter motion stays
   aligned. WAV export remains one arrangement pass plus its effect tail, not endless loops.
 - **Pitch knob** centred (pointing up) at the sample's original pitch; middle C also plays it unshifted.
+- **FL-style typing keyboard** is ready when the editor opens: Q = middle C/C5
+  (MIDI 60), Z = C4 (MIDI 48), S = C#4. The lower chromatic row is
+  `Z S X D C V G B H N J M`; the upper row is
+  `Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P`. Incoming DAW piano-roll MIDI
+  and typing notes share the displayed keyboard. Held keys loop; release, leaving
+  the plugin, or closing its editor releases typing notes. Text entry and modifier
+  shortcuts are not intercepted. Hosts must forward typing keys to the focused
+  plugin; DAW piano-roll MIDI works independently of editor focus.
 - **Interactive 7-band EQ** over a frequency histogram and scrolling heat map. The response
   starts flat at 0 dB; drag numbered handles horizontally for frequency and vertically for
   gain (-18 to +18 dB). Band 4 starts at the centre of a logarithmic 20 Hz to 20 kHz scale.
@@ -40,21 +54,59 @@ them on a magnetic, snap-to-grid waveform playlist.
   Hip Hop, Trap, Breakcore, Jungle, Techno, House, Trance.
 - **Filter power lamp** matches the smaller EQ lamp. Left-click toggles filter-only
   bypass; right-click offers On/Off, filter-only Reset to Default, and three automated
-  presets: Low Pass Filter Sweep, High Pass Filter Sweep, and Resonance Modulation.
+  presets: Low Pass, Band Pass, and High Pass. The modulation dropdown starts at
+  **Select preset...** (manual mode) and offers the same three automated presets,
+  with no Notch entry. Main and custom breaks each remember their own preset,
+  including after saving and reopening the project.
   Sweep presets cycle logarithmically from 20 Hz to the safe high-frequency limit and
-  back; resonance cycles from 0.707 to 3.5 around a 1.5 kHz low-pass filter. Each cycle
+  back using the selected low-pass, band-pass, or high-pass shape. Each cycle
   matches the arranged sample's duration adjusted for playback pitch, restarts on a
   new note, and pauses when playback stops or filter power is off. Selecting the marked
   preset again deselects it. The X/Y pad follows actual smoothed cutoff/resonance without
   automating the stored manual values; filter-only actions do not change EQ settings.
-  Double-left-click the X/Y handle to recenter both displayed parameter ranges. This
-  cancels filter motion and clears mod-wheel modulation so the handle stays centered;
-  center means the midpoint of each range, not literal zero cutoff/resonance.
+  The four-quadrant X/Y pad controls cutoff horizontally and resonance vertically
+  simultaneously. Its exact center is the neutral (0, 0) position: the filter, including
+  drive, is bypassed there without bypassing EQ or reverb. New instances and filter
+  resets start centered; moving away smoothly reactivates the filter. Drag into the
+  small center snap zone or double-left-click the handle to recenter, cancel filter
+  motion, and clear mod-wheel modulation. Motion presets and the mod wheel can still
+  activate filtering independently, and the pad follows their live values.
 - **Animated DRUM/BREAKER logo** retains its left-click full reset and offers a single
   Restore to default... action on right-click. Both restore factory parameters and
   forget the sample. The separate by hidden audio credit opens hiddenaudiofx.com.
 - Emerald styling throughout with hover glow, styled tooltips and a hint strip that is also
   published to the host (FL Studio's hint panel).
+
+## Logo Intro
+
+Each plugin instance plays the embedded company MP4 once, after authoritative
+license verification succeeds. The played flag is saved in the host project, so
+closing/reopening the editor or reopening a saved project never replays it.
+Unverified/pending/failed checks never start it. After a new activation through
+the license panel, Continue dismisses the panel and starts the intro with sound;
+every other playback starts muted (and falls back to muted if the OS blocks
+audible autoplay).
+The video fills the editor (cropping to cover different window aspect ratios).
+Hovering or moving the pointer reveals **X** and **VOLUME**
+in the top left; VOLUME toggles sound without skipping. Any other click, X,
+Escape, or the end of the video goes directly to the existing GUI.
+Typing-piano input is disabled during the intro; incoming DAW MIDI and instrument
+processing are unchanged. Closing the editor stops playback and releases the player.
+Intro sound uses the OS default output, separately from the plugin/DAW audio path.
+Player failures/timeouts return to the GUI with a status-line error.
+
+The HTML player and original MP4 are compiled into the plugin; no desktop file,
+external video download, or loose installed asset is required. Windows uses the
+Microsoft Edge WebView2 Runtime (the installer includes its signed online
+bootstrapper); macOS uses WKWebView. CMake fetches the pinned WebView2 build SDK
+on Windows. macOS intro playback still requires platform validation.
+
+With tests enabled, `SessionStateTest --logo-intro-self-test` (CTest `LogoIntroUI`)
+uses synthetic licensing and a real native editor/player to check the activation
+gate, audible autoplay after panel activation, muted autoplay otherwise,
+full-window resizing, click-to-skip, natural completion, once-per-instance
+playback (including saved-project restore), player cleanup, and loss of verification. This UI test requires the
+WebView2 Runtime and an interactive desktop on Windows.
 
 ## Project Sessions
 

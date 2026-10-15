@@ -11,7 +11,7 @@ const std::vector<FilterPreset>& getFilterPresets()
     static const std::vector<FilterPreset> presets
     {
         { "Custom", "Your own filter and EQ settings",
-          FT::lowPass, 20000.0f, 0.707f, 1.0f, 1.0f,
+          FT::lowPass, ToneStack::filterPadCentreCutoff, ToneStack::filterPadCentreResonance, 1.0f, 1.0f,
           0.0f, 120.0f, 0.0f, 1000.0f, 0.9f, 0.0f, 8000.0f },
 
         { "Hip Hop", "Warm low-pass, fat low end, tape-style top roll off",

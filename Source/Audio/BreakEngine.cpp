@@ -17,18 +17,21 @@ void BreakEngine::reset()
     releasingVoice = Voice();
     playing.store (false);
     playhead.store (0.0f);
+    restartRequested.store (false);
 
     const juce::ScopedLock sl (noteLock);
     heldNotes.clearQuick();
 }
 
-void BreakEngine::setData (BreakData::Ptr newData)
+void BreakEngine::setData (BreakData::Ptr newData, bool restartPlayback)
 {
     if (newData != nullptr)
         newData->rebuildTimeline();
 
     const juce::SpinLock::ScopedLockType sl (dataLock);
     data = newData;
+    if (restartPlayback)
+        restartRequested.store (true);
 }
 
 BreakData::Ptr BreakEngine::getData() const
@@ -222,8 +225,22 @@ void BreakEngine::renderNextBlock (juce::AudioBuffer<float>& output, int startSa
 {
     const juce::SpinLock::ScopedTryLockType sl (dataLock);
 
-    if (! sl.isLocked() || data == nullptr || data->audio == nullptr || data->totalLength <= 0)
+    if (! sl.isLocked())
         return;
+
+    if (restartRequested.exchange (false))
+    {
+        voice.position = 0.0;
+        voice.entry = 0;
+        releasingVoice.active = false;
+        playhead.store (0.0f);
+    }
+
+    if (data == nullptr || data->audio == nullptr || data->totalLength <= 0)
+    {
+        playing.store (false);
+        return;
+    }
 
     const BreakData& d = *data;
     const int numChannels = output.getNumChannels();

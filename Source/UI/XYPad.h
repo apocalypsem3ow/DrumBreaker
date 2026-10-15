@@ -28,7 +28,7 @@ public:
     void mouseExit (const juce::MouseEvent&) override;
 
     void setAxisNames (juce::String x, juce::String y);
-    void setLiveFilterValues (float cutoff, float resonance, bool enabled);
+    void setLiveFilterValues (float cutoff, float resonance, bool enabled, bool followLiveValues = true);
     std::function<void()> onCentre;
 
 private:

@@ -1,5 +1,6 @@
 #include "XYPad.h"
 #include "EmeraldLookAndFeel.h"
+#include "../Audio/ToneStack.h"
 
 namespace drumbreaker
 {
@@ -36,7 +37,7 @@ void XYPad::setAxisNames (juce::String x, juce::String y)
     repaint();
 }
 
-void XYPad::setLiveFilterValues (float cutoff, float resonance, bool enabled)
+void XYPad::setLiveFilterValues (float cutoff, float resonance, bool enabled, bool followLiveValues)
 {
     if (! enabled && dragging)
     {
@@ -46,9 +47,9 @@ void XYPad::setLiveFilterValues (float cutoff, float resonance, bool enabled)
                 parameter->endChangeGesture();
     }
     const juce::Point<float> next { cutoff, resonance };
-    const bool changed = ! liveDisplay || next != liveValues || enabled != isEnabled();
+    const bool changed = liveDisplay != followLiveValues || next != liveValues || enabled != isEnabled();
     liveValues = next;
-    liveDisplay = true;
+    liveDisplay = followLiveValues;
     setEnabled (enabled);
     if (changed)
         repaint();
@@ -74,12 +75,17 @@ juce::Point<float> XYPad::thumbPosition()
 {
     auto area = getLocalBounds().toFloat().reduced (8.0f);
 
-    const float x = liveDisplay && ! dragging && xParam != nullptr
+    float x = liveDisplay && ! dragging && xParam != nullptr
         ? juce::jlimit (0.0f, 1.0f, xParam->convertTo0to1 (liveValues.x))
         : (float) xSlider.valueToProportionOfLength (xSlider.getValue());
-    const float y = liveDisplay && ! dragging && yParam != nullptr
+    float y = liveDisplay && ! dragging && yParam != nullptr
         ? juce::jlimit (0.0f, 1.0f, yParam->convertTo0to1 (liveValues.y))
         : (float) ySlider.valueToProportionOfLength (ySlider.getValue());
+
+    const float cutoff = liveDisplay && ! dragging ? liveValues.x : (float) xSlider.getValue();
+    const float resonance = liveDisplay && ! dragging ? liveValues.y : (float) ySlider.getValue();
+    if (ToneStack::isFilterPadCentred (cutoff, resonance))
+        x = y = 0.5f;
 
     return { area.getX() + area.getWidth() * x,
              area.getBottom() - area.getHeight() * y };
@@ -92,8 +98,13 @@ void XYPad::setFromMouse (const juce::MouseEvent& e)
     const float px = juce::jlimit (0.0f, 1.0f, (e.position.x - area.getX()) / juce::jmax (1.0f, area.getWidth()));
     const float py = juce::jlimit (0.0f, 1.0f, (area.getBottom() - e.position.y) / juce::jmax (1.0f, area.getHeight()));
 
-    xSlider.setValue (xSlider.proportionOfLengthToValue (px), juce::sendNotificationSync);
-    ySlider.setValue (ySlider.proportionOfLengthToValue (py), juce::sendNotificationSync);
+    xSlider.setValue (std::abs (e.position.x - area.getCentreX()) <= 2.0f
+        ? ToneStack::filterPadCentreCutoff : xSlider.proportionOfLengthToValue (px), juce::sendNotificationSync);
+    ySlider.setValue (std::abs (e.position.y - area.getCentreY()) <= 2.0f
+        ? ToneStack::filterPadCentreResonance : ySlider.proportionOfLengthToValue (py), juce::sendNotificationSync);
+    if (ToneStack::isFilterPadCentred ((float) xSlider.getValue(), (float) ySlider.getValue())
+        && onCentre != nullptr)
+        onCentre();
 }
 
 void XYPad::mouseDown (const juce::MouseEvent& e)
@@ -149,11 +160,12 @@ void XYPad::mouseDoubleClick (const juce::MouseEvent& event)
         if (parameter != nullptr)
         {
             parameter->beginChangeGesture();
-            parameter->setValueNotifyingHost (0.5f);
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (
+                parameter == xParam ? ToneStack::filterPadCentreCutoff : ToneStack::filterPadCentreResonance));
             parameter->endChangeGesture();
         }
     if (xParam != nullptr && yParam != nullptr)
-        liveValues = { xParam->convertFrom0to1 (0.5f), yParam->convertFrom0to1 (0.5f) };
+        liveValues = { ToneStack::filterPadCentreCutoff, ToneStack::filterPadCentreResonance };
     glow = 1.0f;
     doubleClickOnThumb = false;
     repaint();
@@ -184,6 +196,10 @@ void XYPad::paint (juce::Graphics& g)
         g.drawVerticalLine   ((int) (area.getX() + area.getWidth()  * (float) i / 4.0f), area.getY(), area.getBottom());
     }
 
+    g.setColour (emerald::accent.withAlpha (0.4f));
+    g.drawHorizontalLine ((int) area.getCentreY(), area.getX(), area.getRight());
+    g.drawVerticalLine ((int) area.getCentreX(), area.getY(), area.getBottom());
+
     const auto thumb = thumbPosition();
     const float intensity = isEnabled() ? 0.35f + glow * 0.65f : 0.05f;
 
@@ -209,6 +225,8 @@ void XYPad::paint (juce::Graphics& g)
     // axis labels
     g.setFont (juce::Font (juce::FontOptions (10.0f)));
     g.setColour (emerald::textDim);
+    if (thumb.getDistanceFrom (area.getCentre()) < 0.01f)
+        g.drawText ("(0, 0) / OFF", area.withHeight (14.0f), juce::Justification::centred, false);
     g.drawText (xName, bounds.reduced (8.0f, 2.0f), juce::Justification::bottomRight, false);
 
     g.saveState();

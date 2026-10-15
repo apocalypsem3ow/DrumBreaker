@@ -6,6 +6,8 @@ Close your DAW and the standalone app before installation or updating.
 The VST3 instrument installs to the system's Common Files\VST3 folder.
 Scan for new plugins in your DAW, then load Drum Breaker as an instrument.
 The standalone app and desktop shortcut are optional installer selections.
+The logo intro uses Microsoft Edge WebView2. If its runtime is missing, setup
+downloads and installs it from Microsoft (internet access required).
 
 ACTIVATION
 A valid DrumBreaker Lemon Squeezy key and internet access are required for
@@ -15,6 +17,17 @@ until verification succeeds. There is no offline grace period.
 Activation is stored for the current Windows user in Credential Manager.
 Updates and uninstall do not remove that record or use a new activation slot.
 Uninstall does not deactivate a license in Lemon Squeezy.
+
+LOGO INTRO
+After license verification, the company logo video plays once per plugin
+instance. The project remembers that it played, so closing and reopening the
+plugin window or the saved project does not replay it. After a new activation,
+click Continue to start the intro with sound; otherwise it starts muted.
+Hover or move the mouse to reveal X and VOLUME in the top left.
+VOLUME toggles intro sound without skipping; any other click skips to the GUI.
+Playback finishes automatically. Intro sound uses the Windows default audio
+output, not your DAW audio output. Intro errors appear in the GUI status line
+and do not prevent using an activated instrument.
 
 PROJECTS AND EXPORTS
 Keep original sample files at their saved locations; project state currently

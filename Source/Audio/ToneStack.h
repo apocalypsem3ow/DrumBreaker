@@ -13,7 +13,7 @@ public:
     enum class FilterType { lowPass = 0, bandPass, highPass, notch };
     enum class EQType { automatic = 0, bell, lowShelf, highShelf, lowPass, highPass };
     enum class EQPreset { flat = 0, lowPass, bandPass, highPass };
-    enum class FilterMotion { none = 0, lowPassSweep, highPassSweep, resonanceModulation };
+    enum class FilterMotion { none = 0, lowPassSweep, highPassSweep, resonanceModulation, bandPassSweep };
 
     struct FilterValues
     {
@@ -23,6 +23,11 @@ public:
     };
 
     static FilterValues evaluateFilterMotion (FilterMotion, double phase, FilterValues manual, double sampleRate);
+
+    // Parameter-range midpoints, rounded to the host parameters' 0.01 steps.
+    static constexpr float filterPadCentreCutoff = 1268.75f;
+    static constexpr float filterPadCentreResonance = 2.59f;
+    static bool isFilterPadCentred (float cutoff, float resonance) noexcept;
 
     struct EQBand
     {
@@ -75,6 +80,7 @@ private:
     juce::SmoothedValue<float> reverbAmountSmoothed { 0.0f };
     juce::SmoothedValue<float> eqMixSmoothed { 1.0f };
     juce::SmoothedValue<float> filterEnabledSmoothed { 1.0f };
+    juce::SmoothedValue<float> filterPadMixSmoothed { 1.0f };
 
     FilterValues manualFilter;
     FilterMotion filterMotion = FilterMotion::none;
@@ -82,6 +88,7 @@ private:
     double filterDuration = 0.0;
     bool filterPlaying = false;
     bool filterEnabled = true;
+    bool filterPadCentred = false;
     std::atomic<float> liveCutoff { 20000.0f };
     std::atomic<float> liveResonance { 0.707f };
 

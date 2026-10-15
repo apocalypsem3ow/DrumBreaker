@@ -14,6 +14,7 @@ $binary = Join-Path $bundle 'Contents\x86_64-win\Drum Breaker.vst3'
 $standalone = Join-Path $release 'Standalone\Drum Breaker.exe'
 $runtimeDirectory = Join-Path $root 'build\installer-dependencies'
 $runtime = Join-Path $runtimeDirectory 'vc_redist.x64.exe'
+$webViewRuntime = Join-Path $runtimeDirectory 'MicrosoftEdgeWebview2Setup.exe'
 
 if ([string]::IsNullOrWhiteSpace($CompilerPath)) {
     $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
@@ -73,12 +74,23 @@ if (-not (Test-Path -LiteralPath $runtime)) {
         if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download }
     }
 }
-$signature = Get-AuthenticodeSignature -LiteralPath $runtime
-if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation(?:,|$)') {
-    throw 'Runtime installer signature is not a valid Microsoft Corporation signature. Remove the cached download and retry.'
+if (-not (Test-Path -LiteralPath $webViewRuntime)) {
+    $download = "$webViewRuntime.download"
+    try {
+        Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $download -UseBasicParsing
+        Move-Item -LiteralPath $download -Destination $webViewRuntime
+    } finally {
+        if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download }
+    }
+}
+foreach ($prerequisite in @($runtime, $webViewRuntime)) {
+    $signature = Get-AuthenticodeSignature -LiteralPath $prerequisite
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation(?:,|$)') {
+        throw "Prerequisite is not signed by Microsoft Corporation: $prerequisite. Remove the cached download and retry."
+    }
 }
 $installerSource = Join-Path $PSScriptRoot 'DrumBreaker.iss'
-& $CompilerPath "/DAppVersion=$Version" "/DRuntimeInstaller=$runtime" $installerSource
+& $CompilerPath "/DAppVersion=$Version" "/DRuntimeInstaller=$runtime" "/DWebViewRuntimeInstaller=$webViewRuntime" $installerSource
 if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
 $output = Join-Path $root "dist\DrumBreaker-Setup-$Version-Windows-x64.exe"
 if (-not (Test-Path -LiteralPath $output)) { throw 'Compiler did not produce the expected installer.' }

@@ -26,7 +26,8 @@ void ToneStack::prepare (const juce::dsp::ProcessSpec& spec)
     eqBuffer.setSize ((int) spec.numChannels, (int) spec.maximumBlockSize, false, false, true);
 
     for (auto* s : { &cutoffSmoothed, &resoSmoothed, &driveSmoothed, &mixSmoothed,
-                     &reverbAmountSmoothed, &eqMixSmoothed, &filterEnabledSmoothed })
+                     &reverbAmountSmoothed, &eqMixSmoothed, &filterEnabledSmoothed,
+                     &filterPadMixSmoothed })
         s->reset (spec.sampleRate, 0.02);
 
     reset();
@@ -98,6 +99,7 @@ void ToneStack::setEQEnabled (bool enabled)
 void ToneStack::setFilter (FilterType type, float cutoffHz, float resonance, float drive, float mix,
                            float modulation)
 {
+    filterPadCentred = isFilterPadCentred (cutoffHz, resonance) && modulation == 0.0f;
     switch (type)
     {
         case FilterType::bandPass: svf.setType (juce::dsp::StateVariableTPTFilterType::bandpass); break;
@@ -117,6 +119,12 @@ void ToneStack::setFilter (FilterType type, float cutoffHz, float resonance, flo
     mixSmoothed   .setTargetValue (juce::jlimit (0.0f, 1.0f, mix));
 }
 
+bool ToneStack::isFilterPadCentred (float cutoff, float resonance) noexcept
+{
+    return std::abs (cutoff - filterPadCentreCutoff) < 0.0051f
+        && std::abs (resonance - filterPadCentreResonance) < 0.0051f;
+}
+
 void ToneStack::setReverb (float amount)
 {
     reverbAmountSmoothed.setTargetValue (juce::jlimit (0.0f, 1.0f, amount));
@@ -129,9 +137,11 @@ ToneStack::FilterValues ToneStack::evaluateFilterMotion (FilterMotion motion, do
     const float sweep = (float) (0.5 - 0.5 * std::cos (2.0 * juce::MathConstants<double>::pi * phase));
     const float maximumCutoff = juce::jmin (20000.0f, (float) (rate * 0.49));
     manual.cutoff = juce::jlimit (20.0f, maximumCutoff, manual.cutoff);
-    if (motion == FilterMotion::lowPassSweep || motion == FilterMotion::highPassSweep)
+    if (motion == FilterMotion::lowPassSweep || motion == FilterMotion::highPassSweep
+        || motion == FilterMotion::bandPassSweep)
     {
-        manual.type = motion == FilterMotion::lowPassSweep ? FilterType::lowPass : FilterType::highPass;
+        manual.type = motion == FilterMotion::bandPassSweep ? FilterType::bandPass
+            : motion == FilterMotion::lowPassSweep ? FilterType::lowPass : FilterType::highPass;
         manual.cutoff = 20.0f * std::pow (maximumCutoff / 20.0f, sweep);
     }
     else if (motion == FilterMotion::resonanceModulation)
@@ -162,8 +172,10 @@ void ToneStack::setFilterPlayback (double durationSeconds, bool playing, bool re
 
 void ToneStack::snapParametersToTargets()
 {
+    filterPadMixSmoothed.setTargetValue (filterPadCentred && filterMotion == FilterMotion::none ? 0.0f : 1.0f);
     for (auto* value : { &cutoffSmoothed, &resoSmoothed, &driveSmoothed, &mixSmoothed,
-                         &reverbAmountSmoothed, &eqMixSmoothed, &filterEnabledSmoothed })
+                         &reverbAmountSmoothed, &eqMixSmoothed, &filterEnabledSmoothed,
+                         &filterPadMixSmoothed })
         value->setCurrentAndTargetValue (value->getTargetValue());
     if (filterMotion != FilterMotion::none && filterDuration > 0.0 && filterEnabled)
     {
@@ -208,6 +220,7 @@ void ToneStack::process (juce::AudioBuffer<float>& buffer)
     for (int ch = 0; ch < numChannels; ++ch)
         dryBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
+    filterPadMixSmoothed.setTargetValue (filterPadCentred && filterMotion == FilterMotion::none ? 0.0f : 1.0f);
     for (int i = 0; i < numSamples; ++i)
     {
         const bool automated = filterMotion != FilterMotion::none && filterDuration > 0.0;
@@ -238,7 +251,8 @@ void ToneStack::process (juce::AudioBuffer<float>& buffer)
         }
 
         const float drive = driveSmoothed.getNextValue();
-        const float mix   = mixSmoothed.getNextValue() * filterEnabledSmoothed.getNextValue();
+        const float mix   = mixSmoothed.getNextValue() * filterEnabledSmoothed.getNextValue()
+                          * filterPadMixSmoothed.getNextValue();
         const float makeUp = 1.0f / std::sqrt (drive);
 
         for (int ch = 0; ch < numChannels; ++ch)

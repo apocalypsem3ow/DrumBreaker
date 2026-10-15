@@ -515,8 +515,98 @@ static int runEQChecks()
         }
     }
 
+    for (double rate : { 22050.0, 44100.0, 48000.0, 96000.0 })
+        for (int channels : { 1, 2 })
+            for (auto type : { ToneStack::FilterType::lowPass, ToneStack::FilterType::highPass,
+                               ToneStack::FilterType::bandPass, ToneStack::FilterType::notch })
+            {
+                ToneStack tone;
+                tone.prepare ({ rate, 512, (juce::uint32) channels });
+                tone.setEQ (ToneStack::makeEQPreset (ToneStack::EQPreset::flat));
+                tone.setEQEnabled (false);
+                tone.setReverb (0.0f);
+                juce::AudioBuffer<float> audio (channels, 512), dry (channels, 512);
+                for (const auto position : {
+                    ToneStack::FilterValues { type, ToneStack::filterPadCentreCutoff, ToneStack::filterPadCentreResonance },
+                    ToneStack::FilterValues { type, 600.0f, ToneStack::filterPadCentreResonance },
+                    ToneStack::FilterValues { type, ToneStack::filterPadCentreCutoff, 1.2f },
+                    ToneStack::FilterValues { type, 600.0f, 1.2f }, ToneStack::FilterValues { type, 1800.0f, 1.2f },
+                    ToneStack::FilterValues { type, 600.0f, 4.0f }, ToneStack::FilterValues { type, 1800.0f, 4.0f },
+                    ToneStack::FilterValues { type, ToneStack::filterPadCentreCutoff, ToneStack::filterPadCentreResonance } })
+                {
+                    tone.setFilter (type, position.cutoff, position.resonance, 6.0f, 1.0f, 0.0f);
+                    float difference = 0.0f;
+                    for (int block = 0; block < 8; ++block)
+                    {
+                        for (int sample = 0; sample < 512; ++sample)
+                            for (int channel = 0; channel < channels; ++channel)
+                                audio.setSample (channel, sample, (float) (0.35 * std::sin (
+                                    2.0 * juce::MathConstants<double>::pi * 7000.0 * (block * 512 + sample) / rate)));
+                        dry.makeCopyOf (audio);
+                        tone.process (audio);
+                        for (int channel = 0; channel < channels; ++channel)
+                            for (int sample = 0; sample < 512; ++sample)
+                            {
+                                check (std::isfinite (audio.getSample (channel, sample)),
+                                       "filter pad bypass transitions remain finite");
+                                if (block == 7)
+                                    difference = juce::jmax (difference, std::abs (
+                                        audio.getSample (channel, sample) - dry.getSample (channel, sample)));
+                            }
+                    }
+                    check (ToneStack::isFilterPadCentred (position.cutoff, position.resonance)
+                            ? difference < 0.000001f : difference > 0.0001f,
+                           "center bypasses every filter shape and drive; axes and quadrants reactivate filtering");
+                }
+            }
+
+    for (int modulationMode : { 0, 1, 2 })
+    {
+        ToneStack tone, reference;
+        for (auto* effects : { &tone, &reference })
+        {
+            effects->prepare ({ 48000.0, 512, 2 });
+            auto activeEQ = ToneStack::makeEQPreset (ToneStack::EQPreset::flat);
+            activeEQ[3].gainDb = 6.0f;
+            effects->setEQ (activeEQ);
+            effects->setFilter (ToneStack::FilterType::lowPass, ToneStack::filterPadCentreCutoff,
+                                ToneStack::filterPadCentreResonance, 6.0f, 1.0f, 0.0f);
+            effects->setReverb (0.3f);
+            effects->snapParametersToTargets();
+        }
+        reference.setFilterEnabled (false);
+        reference.snapParametersToTargets();
+        if (modulationMode == 1)
+        {
+            tone.setFilterMotion (ToneStack::FilterMotion::lowPassSweep);
+            tone.setFilterPlayback (0.25, true, true);
+        }
+        if (modulationMode == 2)
+            tone.setFilter (ToneStack::FilterType::lowPass, ToneStack::filterPadCentreCutoff,
+                            ToneStack::filterPadCentreResonance, 6.0f, 1.0f, 1.0f);
+        juce::AudioBuffer<float> audio (2, 512), expected (2, 512);
+        float difference = 0.0f;
+        for (int block = 0; block < 12; ++block)
+        {
+            for (int sample = 0; sample < 512; ++sample)
+                for (int channel = 0; channel < 2; ++channel)
+                    audio.setSample (channel, sample, (float) (0.1 * std::sin (
+                        2.0 * juce::MathConstants<double>::pi * 1000.0 * (block * 512 + sample) / 48000.0)));
+            expected.makeCopyOf (audio);
+            tone.process (audio);
+            reference.process (expected);
+            if (block == 11)
+                for (int channel = 0; channel < 2; ++channel)
+                    for (int sample = 0; sample < 512; ++sample)
+                        difference = juce::jmax (difference, std::abs (
+                            audio.getSample (channel, sample) - expected.getSample (channel, sample)));
+        }
+        check (modulationMode != 0 ? difference > 0.0001f : difference < 0.000001f,
+               "center bypass preserves EQ/reverb and explicit motion/mod wheel still activates filtering");
+    }
+
     for (auto motion : { ToneStack::FilterMotion::lowPassSweep, ToneStack::FilterMotion::highPassSweep,
-                         ToneStack::FilterMotion::resonanceModulation })
+                         ToneStack::FilterMotion::bandPassSweep, ToneStack::FilterMotion::resonanceModulation })
     {
         for (double rate : { 22050.0, 44100.0, 48000.0, 96000.0 })
         {
@@ -534,6 +624,8 @@ static int runEQChecks()
                     check (values.type == ToneStack::FilterType::lowPass, "low-pass sweep uses a low-pass filter");
                 if (motion == ToneStack::FilterMotion::highPassSweep)
                     check (values.type == ToneStack::FilterType::highPass, "high-pass sweep uses a high-pass filter");
+                if (motion == ToneStack::FilterMotion::bandPassSweep)
+                    check (values.type == ToneStack::FilterType::bandPass, "band-pass sweep uses a band-pass filter");
                 if (motion == ToneStack::FilterMotion::resonanceModulation)
                 {
                     check (values.cutoff == manual.cutoff, "resonance motion leaves cutoff unchanged");
@@ -847,6 +939,28 @@ static int runExportChecks()
            "export leaves the original arrangement unchanged");
     check (OfflineExporter::writeWav (snapshot, dryFile).failed(), "existing WAVs cannot be silently overwritten");
 
+    auto centred = snapshot;
+    centred.filterEnabled = true;
+    centred.filter.cutoff = ToneStack::filterPadCentreCutoff;
+    centred.filter.resonance = ToneStack::filterPadCentreResonance;
+    centred.filterDrive = 6.0f;
+    const auto centredFile = directory.getChildFile ("centred.wav");
+    check (OfflineExporter::writeWav (centred, centredFile).wasOk(), "centered filter export succeeds");
+    std::unique_ptr<juce::AudioFormatReader> centredReader (formats.createReaderFor (centredFile));
+    check (centredReader != nullptr && centredReader->lengthInSamples == 7200,
+           "centered filter export has no filter decay tail");
+    if (centredReader != nullptr && centredReader->lengthInSamples == 7200)
+    {
+        juce::AudioBuffer<float> centredAudio (2, 7200);
+        centredReader->read (&centredAudio, 0, 7200, 0, true, true);
+        float centredError = 0.0f;
+        for (int channel = 0; channel < 2; ++channel)
+            for (int sample = 0; sample < 7200; ++sample)
+                centredError = juce::jmax (centredError, std::abs (
+                    centredAudio.getSample (channel, sample) - actual.getSample (channel, sample)));
+        check (centredError < 0.000001f, "centered export matches dry playback even at maximum drive");
+    }
+
     const auto pitchedFile = directory.getChildFile ("pitched.wav");
     snapshot.pitchSemitones = 12.0f;
     check (OfflineExporter::writeWav (snapshot, pitchedFile).wasOk(), "pitched export succeeds");
@@ -878,6 +992,21 @@ static int runExportChecks()
         for (int sample = 0; sample < 7200; ++sample)
             difference = juce::jmax (difference, std::abs (rendered.getSample (0, sample) - actual.getSample (0, sample)));
         check (difference > 0.01f, "EQ/filter motion/reverb/output processing changes the exported audio");
+    }
+
+    {
+        auto bandPass = snapshot;
+        bandPass.motion = ToneStack::FilterMotion::bandPassSweep;
+        bandPass.eqEnabled = false;
+        bandPass.reverb = 0.0f;
+        const auto bandPassFile = directory.getChildFile ("band-pass.wav");
+        check (OfflineExporter::writeWav (bandPass, bandPassFile).wasOk(),
+               "automated band-pass export succeeds");
+        std::unique_ptr<juce::AudioFormatReader> bandPassReader (formats.createReaderFor (bandPassFile));
+        const auto tailFrames = (juce::int64) std::ceil (rate * juce::jlimit (0.02, 4.0,
+            0.02 + 12.0 * bandPass.filter.resonance / (juce::MathConstants<double>::pi * 20.0)));
+        check (bandPassReader != nullptr && bandPassReader->lengthInSamples == 7200 + tailFrames,
+               "band-pass export uses the swept minimum cutoff for its complete decay tail");
     }
 
         snapshot.eqEnabled = false;

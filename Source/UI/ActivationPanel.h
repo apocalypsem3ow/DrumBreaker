@@ -18,6 +18,8 @@ public:
     void showIfUnverified();
 
     std::function<void()> onDismiss;
+    /** Called once when a license key entered by the user activates successfully. */
+    std::function<void()> onActivated;
 
 private:
     void attemptActivation();
@@ -33,6 +35,7 @@ private:
     bool busy = false;
     bool verified = false;
     bool pendingAutomaticPrompt = false;
+    bool awaitingUserActivation = false;
     juce::String displayedStatus;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ActivationPanel)

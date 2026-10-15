@@ -10,6 +10,94 @@ namespace drumbreaker
 
 using APVTS = juce::AudioProcessorValueTreeState;
 
+static std::vector<const char*> getEffectParameterIDs()
+{
+    std::vector<const char*> ids { params::eqEnabled };
+
+    for (size_t band = 0; band < params::eqGainIDs.size(); ++band)
+    {
+        ids.push_back (params::eqGainIDs[band]);
+        ids.push_back (params::eqFrequencyIDs[band]);
+        if (params::eqQIDs[band] != nullptr)
+            ids.push_back (params::eqQIDs[band]);
+        ids.push_back (params::eqTypeIDs[band]);
+    }
+
+    for (const auto* id : { params::filterType, params::filterCutoff, params::filterReso,
+                            params::filterDrive, params::filterMix, params::filterPreset,
+                            params::filterEnabled, params::filterMotion })
+        ids.push_back (id);
+
+    return ids;
+}
+
+static juce::String encodeNumbers (const std::vector<float>& values)
+{
+    juce::StringArray tokens;
+    for (float value : values)
+        tokens.add (juce::String (value, 8));
+    return tokens.joinIntoString (",");
+}
+
+static std::vector<float> decodeNumbers (const juce::String& text)
+{
+    std::vector<float> values;
+    if (text.isEmpty())
+        return values;
+
+    for (const auto& token : juce::StringArray::fromTokens (text, ",", ""))
+    {
+        const double value = token.getDoubleValue();
+        if (! std::isfinite (value))
+            return {};
+        values.push_back ((float) value);
+    }
+    return values;
+}
+
+static juce::String encodeSlices (const std::vector<Slice>& slices)
+{
+    juce::StringArray tokens;
+    for (const auto& slice : slices)
+        tokens.add (juce::String (slice.start) + ":" + juce::String (slice.end));
+    return tokens.joinIntoString (",");
+}
+
+static std::vector<Slice> decodeSlices (const juce::String& text)
+{
+    std::vector<Slice> slices;
+    if (text.isEmpty())
+        return slices;
+
+    for (const auto& token : juce::StringArray::fromTokens (text, ",", ""))
+    {
+        const auto parts = juce::StringArray::fromTokens (token, ":", "");
+        if (parts.size() != 2)
+            return {};
+        slices.push_back ({ parts[0].getLargeIntValue(), parts[1].getLargeIntValue() });
+    }
+    return slices;
+}
+
+static juce::String encodeOrder (const std::vector<int>& order)
+{
+    juce::StringArray tokens;
+    for (int index : order)
+        tokens.add (juce::String (index));
+    return tokens.joinIntoString (",");
+}
+
+static std::vector<int> decodeOrder (const juce::String& text)
+{
+    std::vector<int> order;
+    if (text.isEmpty())
+        return order;
+
+    for (const auto& token : juce::StringArray::fromTokens (text, ",", ""))
+        order.push_back (token.getIntValue());
+    return order;
+}
+
 static juce::String hzToText (float value, int)
 {
     return value >= 1000.0f ? juce::String (value / 1000.0f, 2) + " kHz"
@@ -73,12 +161,12 @@ APVTS::ParameterLayout DrumBreakerProcessor::createParameterLayout()
 
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { params::filterCutoff, 1 }, "Cutoff",
-        juce::NormalisableRange<float> (20.0f, 20000.0f, 0.01f, 0.25f), 20000.0f,
+        juce::NormalisableRange<float> (20.0f, 20000.0f, 0.01f, 0.25f), ToneStack::filterPadCentreCutoff,
         juce::AudioParameterFloatAttributes().withStringFromValueFunction (hzToText)));
 
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { params::filterReso, 1 }, "Resonance",
-        juce::NormalisableRange<float> (0.1f, 8.0f, 0.01f, 0.6f), 0.707f));
+        juce::NormalisableRange<float> (0.1f, 8.0f, 0.01f, 0.6f), ToneStack::filterPadCentreResonance));
 
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { params::filterDrive, 1 }, "Drive",
@@ -96,7 +184,8 @@ APVTS::ParameterLayout DrumBreakerProcessor::createParameterLayout()
         juce::ParameterID { params::filterEnabled, 1 }, "Filter Enabled", true));
     layout.add (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { params::filterMotion, 1 }, "Filter Motion",
-        juce::StringArray { "None", "Low Pass Filter Sweep", "High Pass Filter Sweep", "Resonance Modulation" }, 0));
+        juce::StringArray { "None", "Low Pass Filter Sweep", "High Pass Filter Sweep", "Resonance Modulation",
+                            "Band Pass Filter Sweep" }, 0));
 
     return layout;
 }
@@ -121,6 +210,8 @@ DrumBreakerProcessor::DrumBreakerProcessor (licensing::LicenseClient::Options li
                 apvts.addParameterListener (id, this);
 
     apvts.addParameterListener (params::filterPreset, this);
+
+    captureEffectSettings (mainEffectSettings);
 }
 
 DrumBreakerProcessor::~DrumBreakerProcessor()
@@ -333,14 +424,138 @@ OfflineExporter::Snapshot DrumBreakerProcessor::captureExportSnapshot() const
 //==============================================================================
 bool DrumBreakerProcessor::hasSample() const
 {
-    auto d = engine.getData();
+    auto d = getBreakData();
     return d != nullptr && d->audio != nullptr && d->audio->getNumSamples() > 0;
 }
 
 void DrumBreakerProcessor::publish (BreakData::Ptr newData)
 {
-    engine.setData (newData);
+    BreakData::Ptr activeData;
+    bool clearCustomSettings = false;
+    {
+        const juce::SpinLock::ScopedLockType sl (arrangementLock);
+        mainData = newData;
+        if (customData != nullptr && (newData == nullptr || customData->audio != newData->audio))
+        {
+            customData = nullptr;
+            customBreakSelected.store (false);
+            clearCustomSettings = true;
+        }
+        activeData = customBreakSelected.load() ? customData : mainData;
+    }
+    if (clearCustomSettings)
+    {
+        const juce::ScopedLock sl (effectSettingsLock);
+        customEffectSettings.clear();
+    }
+    engine.setData (activeData);
     sendChangeMessage();
+}
+
+BreakData::Ptr DrumBreakerProcessor::getBreakData() const
+{
+    const juce::SpinLock::ScopedLockType sl (arrangementLock);
+    return mainData;
+}
+
+BreakData::Ptr DrumBreakerProcessor::getCustomBreakData() const
+{
+    const juce::SpinLock::ScopedLockType sl (arrangementLock);
+    return customData;
+}
+
+bool DrumBreakerProcessor::hasCustomBreak() const
+{
+    return getCustomBreakData() != nullptr;
+}
+
+std::vector<juce::RangedAudioParameter*> DrumBreakerProcessor::getEffectParameters()
+{
+    std::vector<juce::RangedAudioParameter*> parameters;
+    for (const auto* id : getEffectParameterIDs())
+        if (auto* parameter = apvts.getParameter (id))
+            parameters.push_back (parameter);
+    return parameters;
+}
+
+void DrumBreakerProcessor::captureEffectSettings (std::vector<float>& destination) const
+{
+    destination.clear();
+    for (const auto* id : getEffectParameterIDs())
+        if (auto* parameter = apvts.getParameter (id))
+            destination.push_back (parameter->getValue());
+}
+
+void DrumBreakerProcessor::applyEffectSettings (const std::vector<float>& settings)
+{
+    const auto parameters = getEffectParameters();
+    if (settings.size() != parameters.size())
+        return;
+
+    restoringState.store (true);
+    for (size_t i = 0; i < parameters.size(); ++i)
+        parameters[i]->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, settings[i]));
+    restoringState.store (false);
+    toneStackDirty.store (true);
+}
+
+void DrumBreakerProcessor::selectCustomBreak (bool selected)
+{
+    auto custom = getCustomBreakData();
+    if (selected && custom == nullptr)
+        return;
+
+    if (customBreakSelected.load() == selected)
+        return;
+
+    std::vector<float> currentSettings;
+    captureEffectSettings (currentSettings);
+    std::vector<float> nextSettings;
+    {
+        const juce::ScopedLock sl (effectSettingsLock);
+        auto& activeSettings = customBreakSelected.load() ? customEffectSettings : mainEffectSettings;
+        activeSettings = std::move (currentSettings);
+
+        auto& nextBank = selected ? customEffectSettings : mainEffectSettings;
+        if (nextBank.empty())
+            nextBank = activeSettings;
+        nextSettings = nextBank;
+        customBreakSelected.store (selected);
+    }
+
+    engine.setData (selected ? custom : getBreakData(), true);
+    applyEffectSettings (nextSettings);
+}
+
+bool DrumBreakerProcessor::createCustomBreak()
+{
+    auto source = getBreakData();
+    if (source == nullptr || source->audio == nullptr || ! sampleBroken.load() || hasCustomBreak())
+        return false;
+
+    auto custom = new BreakData();
+    custom->audio = source->audio;
+    custom->sourceSampleRate = source->sourceSampleRate;
+    custom->name = source->name;
+    custom->slices = source->slices;
+    custom->rebuildTimeline();
+
+    std::vector<float> activeSettings;
+    captureEffectSettings (activeSettings);
+    {
+        const juce::ScopedLock sl (effectSettingsLock);
+        auto& activeBank = customBreakSelected.load() ? customEffectSettings : mainEffectSettings;
+        activeBank = activeSettings;
+        customEffectSettings = std::move (activeSettings);
+    }
+
+    {
+        const juce::SpinLock::ScopedLockType sl (arrangementLock);
+        customData = custom;
+    }
+    selectCustomBreak (true);
+    sendChangeMessage();
+    return true;
 }
 
 void DrumBreakerProcessor::resetToDefaults()
@@ -363,6 +578,13 @@ void DrumBreakerProcessor::clearLoadedSession()
     modWheelAmount.store (0.0f);
     loadedFile = juce::File();
     detectedBpm.store (0.0);
+    customBreakSelected.store (false);
+    sampleBroken.store (false);
+    {
+        const juce::ScopedLock sl (effectSettingsLock);
+        mainEffectSettings.clear();
+        customEffectSettings.clear();
+    }
     toneStackDirty.store (true);
     resetRequested.store (true);
     publish (nullptr);
@@ -414,6 +636,19 @@ bool DrumBreakerProcessor::loadSampleFile (const juce::File& file, juce::String&
     newData->arrangement = { 0 };
 
     loadedFile = file;
+    customBreakSelected.store (false);
+    sampleBroken.store (false);
+    {
+        const juce::SpinLock::ScopedLockType sl (arrangementLock);
+        customData = nullptr;
+    }
+    std::vector<float> initialSettings;
+    captureEffectSettings (initialSettings);
+    {
+        const juce::ScopedLock sl (effectSettingsLock);
+        customEffectSettings.clear();
+        mainEffectSettings = std::move (initialSettings);
+    }
     publish (newData);
 
     return true;
@@ -421,7 +656,7 @@ bool DrumBreakerProcessor::loadSampleFile (const juce::File& file, juce::String&
 
 void DrumBreakerProcessor::breakSample()
 {
-    auto current = engine.getData();
+    auto current = getBreakData();
 
     if (current == nullptr || current->audio == nullptr)
         return;
@@ -438,12 +673,13 @@ void DrumBreakerProcessor::breakSample()
     newData->arrangement.resize (newData->slices.size());
     std::iota (newData->arrangement.begin(), newData->arrangement.end(), 0);
 
+    sampleBroken.store (true);
     publish (newData);
 }
 
 void DrumBreakerProcessor::restoreWholeSample()
 {
-    auto current = engine.getData();
+    auto current = getBreakData();
 
     if (current == nullptr || current->audio == nullptr)
         return;
@@ -455,17 +691,39 @@ void DrumBreakerProcessor::restoreWholeSample()
     newData->slices.push_back ({ 0, (juce::int64) current->audio->getNumSamples() });
     newData->arrangement = { 0 };
 
+    sampleBroken.store (false);
     publish (newData);
 }
 
 void DrumBreakerProcessor::setArrangement (const std::vector<int>& newArrangement)
 {
-    auto current = engine.getData();
+    auto current = getBreakData();
 
     if (current == nullptr)
         return;
 
-    engine.setData (current->withArrangement (newArrangement));
+    auto updated = current->withArrangement (newArrangement);
+    {
+        const juce::SpinLock::ScopedLockType sl (arrangementLock);
+        mainData = updated;
+    }
+    if (! customBreakSelected.load())
+        engine.setData (updated);
+}
+
+void DrumBreakerProcessor::setCustomArrangement (const std::vector<int>& newArrangement)
+{
+    auto current = getCustomBreakData();
+    if (current == nullptr)
+        return;
+
+    auto updated = current->withArrangement (newArrangement);
+    {
+        const juce::SpinLock::ScopedLockType sl (arrangementLock);
+        customData = updated;
+    }
+    if (customBreakSelected.load())
+        engine.setData (updated);
 }
 
 void DrumBreakerProcessor::triggerPreviewOn (int midiNote)
@@ -483,6 +741,16 @@ void DrumBreakerProcessor::triggerPreviewOff (int midiNote)
 //==============================================================================
 void DrumBreakerProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
+    std::vector<float> currentSettings;
+    captureEffectSettings (currentSettings);
+    std::vector<float> savedMainSettings, savedCustomSettings;
+    {
+        const juce::ScopedLock sl (effectSettingsLock);
+        (customBreakSelected.load() ? customEffectSettings : mainEffectSettings) = std::move (currentSettings);
+        savedMainSettings = mainEffectSettings;
+        savedCustomSettings = customEffectSettings;
+    }
+
     auto state = apvts.copyState();
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
 
@@ -493,22 +761,30 @@ void DrumBreakerProcessor::getStateInformation (juce::MemoryBlock& destData)
     performance->setAttribute ("pitchWheel", pitchWheelSemitones.load());
     performance->setAttribute ("modWheel", modWheelAmount.load());
 
-    if (auto d = engine.getData())
+    xml->createNewChildElement ("INTRO")->setAttribute ("played", logoIntroPlayed.load());
+    auto d = getBreakData();
+    if (d != nullptr)
     {
         auto* sample = xml->createNewChildElement ("SAMPLE");
         sample->setAttribute ("file", loadedFile.getFullPathName());
         sample->setAttribute ("bpm", detectedBpm.load());
+        sample->setAttribute ("broken", sampleBroken.load());
 
-        juce::StringArray sliceText, orderText;
+        sample->setAttribute ("slices", encodeSlices (d->slices));
+        sample->setAttribute ("order", encodeOrder (d->arrangement));
+    }
 
-        for (const auto& s : d->slices)
-            sliceText.add (juce::String (s.start) + ":" + juce::String (s.end));
+    auto* effectBanks = xml->createNewChildElement ("EFFECT_BANKS");
+    effectBanks->setAttribute ("filterMotionChoices", 5);
+    effectBanks->setAttribute ("main", encodeNumbers (savedMainSettings));
+    effectBanks->setAttribute ("custom", encodeNumbers (savedCustomSettings));
 
-        for (int i : d->arrangement)
-            orderText.add (juce::String (i));
-
-        sample->setAttribute ("slices", sliceText.joinIntoString (","));
-        sample->setAttribute ("order", orderText.joinIntoString (","));
+    if (auto custom = getCustomBreakData())
+    {
+        auto* customElement = xml->createNewChildElement ("CUSTOM_BREAK");
+        customElement->setAttribute ("selected", customBreakSelected.load());
+        customElement->setAttribute ("slices", encodeSlices (custom->slices));
+        customElement->setAttribute ("order", encodeOrder (custom->arrangement));
     }
 
     copyXmlToBinary (*xml, destData);
@@ -527,11 +803,36 @@ void DrumBreakerProcessor::setStateInformation (const void* data, int sizeInByte
     if (sample != nullptr)
         xml->removeChildElement (sample, true);
 
+    auto* custom = xml->getChildByName ("CUSTOM_BREAK");
+    std::unique_ptr<juce::XmlElement> customCopy (custom != nullptr ? new juce::XmlElement (*custom) : nullptr);
+    if (custom != nullptr)
+        xml->removeChildElement (custom, true);
+
+    auto* effectBanks = xml->getChildByName ("EFFECT_BANKS");
+    auto savedMainSettings = effectBanks != nullptr ? decodeNumbers (effectBanks->getStringAttribute ("main"))
+                                                         : std::vector<float>();
+    auto savedCustomSettings = effectBanks != nullptr ? decodeNumbers (effectBanks->getStringAttribute ("custom"))
+                                                           : std::vector<float>();
+    // Banks store normalized values; preserve old motion indices when adding Band Pass.
+    if (effectBanks != nullptr && effectBanks->getIntAttribute ("filterMotionChoices", 4) == 4)
+        for (auto* settings : { &savedMainSettings, &savedCustomSettings })
+            if (settings->size() == getEffectParameterIDs().size())
+                settings->back() *= 0.75f;
+    if (effectBanks != nullptr)
+        xml->removeChildElement (effectBanks, true);
+
     auto* performance = xml->getChildByName ("PERFORMANCE");
     const float restoredPitchWheel = performance != nullptr ? (float) performance->getDoubleAttribute ("pitchWheel", 0.0) : 0.0f;
     const float restoredModWheel = performance != nullptr ? (float) performance->getDoubleAttribute ("modWheel", 0.0) : 0.0f;
     if (performance != nullptr)
         xml->removeChildElement (performance, true);
+
+    if (auto* intro = xml->getChildByName ("INTRO"))
+    {
+        if (intro->getBoolAttribute ("played", false))
+            logoIntroPlayed.store (true);
+        xml->removeChildElement (intro, true);
+    }
 
     clearLoadedSession();
     restoringState.store (true);
@@ -559,20 +860,8 @@ void DrumBreakerProcessor::setStateInformation (const void* data, int sizeInByte
     if (current == nullptr)
         return;
 
-    std::vector<Slice> slices;
-
-    for (const auto& token : juce::StringArray::fromTokens (sampleCopy->getStringAttribute ("slices"), ",", ""))
-    {
-        const auto parts = juce::StringArray::fromTokens (token, ":", "");
-
-        if (parts.size() == 2)
-            slices.push_back ({ parts[0].getLargeIntValue(), parts[1].getLargeIntValue() });
-    }
-
-    std::vector<int> order;
-
-    for (const auto& token : juce::StringArray::fromTokens (sampleCopy->getStringAttribute ("order"), ",", ""))
-        order.push_back (token.getIntValue());
+    auto slices = decodeSlices (sampleCopy->getStringAttribute ("slices"));
+    auto order = decodeOrder (sampleCopy->getStringAttribute ("order"));
 
     if (slices.empty())
         return;
@@ -597,7 +886,53 @@ void DrumBreakerProcessor::setStateInformation (const void* data, int sizeInByte
     restored->slices = std::move (slices);
     restored->arrangement = std::move (order);
 
+    sampleBroken.store (sampleCopy->getBoolAttribute ("broken", restored->slices.size() > 1));
     publish (restored);
+
+    const auto expectedSettings = getEffectParameters().size();
+    auto currentSettings = std::vector<float>();
+    if (savedMainSettings.size() != expectedSettings)
+        captureEffectSettings (currentSettings);
+    {
+        const juce::ScopedLock sl (effectSettingsLock);
+        mainEffectSettings = savedMainSettings.size() == expectedSettings ? savedMainSettings
+                                                                          : currentSettings;
+        customEffectSettings = savedCustomSettings.size() == expectedSettings ? savedCustomSettings
+                                                                              : std::vector<float>();
+    }
+
+    if (customCopy != nullptr)
+    {
+        auto customSlices = decodeSlices (customCopy->getStringAttribute ("slices"));
+        auto customOrder = decodeOrder (customCopy->getStringAttribute ("order"));
+        bool valid = ! customSlices.empty();
+        for (const auto& slice : customSlices)
+            valid = valid && slice.start >= 0 && slice.end <= current->audio->getNumSamples()
+                    && slice.end > slice.start;
+        for (int index : customOrder)
+            valid = valid && juce::isPositiveAndBelow (index, (int) customSlices.size());
+
+        if (valid)
+        {
+            auto customDataToRestore = new BreakData();
+            customDataToRestore->audio = current->audio;
+            customDataToRestore->sourceSampleRate = current->sourceSampleRate;
+            customDataToRestore->name = current->name;
+            customDataToRestore->slices = std::move (customSlices);
+            customDataToRestore->arrangement = std::move (customOrder);
+            customDataToRestore->rebuildTimeline();
+            {
+                const juce::SpinLock::ScopedLockType sl (arrangementLock);
+                customData = customDataToRestore;
+            }
+
+            const bool selectCustom = customCopy->getBoolAttribute ("selected", false);
+            customBreakSelected.store (selectCustom);
+            engine.setData (selectCustom ? customDataToRestore : restored);
+        }
+    }
+
+    toneStackDirty.store (true);
 }
 
 } // namespace drumbreaker

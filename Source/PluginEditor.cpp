@@ -5,6 +5,43 @@
 namespace drumbreaker
 {
 
+static ToneStack::FilterMotion filterMotionForPreset (int preset)
+{
+    switch (preset)
+    {
+        case 1: return ToneStack::FilterMotion::lowPassSweep;
+        case 2: return ToneStack::FilterMotion::bandPassSweep;
+        case 3: return ToneStack::FilterMotion::highPassSweep;
+        default: return ToneStack::FilterMotion::none;
+    }
+}
+
+int PianoRoll::noteForTypingKey (int keyCode) noexcept
+{
+    const int key = (int) juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) keyCode);
+    constexpr char lower[] = "zsxdcvgbhnjm";
+    constexpr char upper[] = "q2w3er5t6y7ui9o0p";
+    for (int offset = 0; offset < 17; ++offset)
+    {
+        if (offset < 12 && key == lower[offset])
+            return 48 + offset;
+        if (key == upper[offset])
+            return 60 + offset;
+    }
+    return -1;
+}
+
+PianoRoll::PianoRoll (juce::MidiKeyboardState& state, Orientation orientation)
+    : juce::MidiKeyboardComponent (state, orientation)
+{
+    clearKeyMappings();
+    setKeyPressBaseOctave (4);
+    for (int key = 32; key < 127; ++key)
+        if (const int note = noteForTypingKey (key); note >= 0)
+            setKeyPressForNote (juce::KeyPress (juce::CharacterFunctions::toUpperCase (
+                (juce::juce_wchar) key), 0, 0), note - 48);
+}
+
 void ActivationStatusButton::setLicenseVerified (bool verified)
 {
     if (licenseVerified == verified)
@@ -203,8 +240,8 @@ public:
             updateItems();
         };
         lowPass.setButtonText (filterSection ? "Low Pass Filter Sweep..." : "Low Pass");
-        bandPass.setButtonText (filterSection ? "High Pass Filter Sweep..." : "Band Pass");
-        highPass.setButtonText (filterSection ? "Resonance Modulation..." : "High Pass");
+        bandPass.setButtonText (filterSection ? "Band Pass Filter Sweep..." : "Band Pass");
+        highPass.setButtonText (filterSection ? "High Pass Filter Sweep..." : "High Pass");
         lowPass.onClick = [this] { applyPreset (1); };
         bandPass.onClick = [this] { applyPreset (2); };
         highPass.onClick = [this] { applyPreset (3); };
@@ -283,17 +320,12 @@ private:
             }
             else
             {
-                if (selected != preset)
+                const auto motion = filterMotionForPreset (preset);
+                if (selected != (int) motion)
                 {
                     set (params::filterMix, 1.0f);
-                    set (params::filterType, preset == 2 ? 2.0f : 0.0f);
-                    if (preset == 3)
-                    {
-                        set (params::filterType, 0.0f);
-                        set (params::filterCutoff, 1500.0f);
-                    }
                 }
-                set (params::filterMotion, selected == preset ? 0.0f : (float) preset);
+                set (params::filterMotion, selected == (int) motion ? 0.0f : (float) motion);
             }
         }
         else
@@ -320,9 +352,9 @@ private:
         if (filterSection)
         {
             const int selected = (int) state.getRawParameterValue (params::filterMotion)->load();
-            lowPass.checked = selected == 1;
-            bandPass.checked = selected == 2;
-            highPass.checked = selected == 3;
+            lowPass.checked = selected == (int) ToneStack::FilterMotion::lowPassSweep;
+            bandPass.checked = selected == (int) ToneStack::FilterMotion::bandPassSweep;
+            highPass.checked = selected == (int) ToneStack::FilterMotion::highPassSweep;
         }
         repaint();
     }
@@ -698,6 +730,7 @@ DrumBreakerEditor::DrumBreakerEditor (DrumBreakerProcessor& p)
 {
     setLookAndFeel (&lookAndFeel);
     setOpaque (true);
+    setWantsKeyboardFocus (true);
     setResizable (true, true);
     setResizeLimits (900, 600, 1800, 1200);
     setSize (1060, 680);
@@ -727,6 +760,85 @@ DrumBreakerEditor::DrumBreakerEditor (DrumBreakerProcessor& p)
     {
         processor.setArrangement (order);
     };
+    waveform.onSelected = [this]
+    {
+        processor.selectCustomBreak (false);
+        waveform.setSelected (true);
+        customWaveform.setSelected (false);
+    };
+    waveform.onFragmentDropped = [this] (BreakData::Ptr source, int sliceIndex, juce::Point<int> pointInTop)
+    {
+        auto* top = getTopLevelComponent();
+        if (top == nullptr || ! customWaveform.isVisible())
+            return false;
+
+        const auto pointInEditor = getLocalPoint (top, pointInTop);
+        if (! customWaveform.getBounds().contains (pointInEditor))
+            return false;
+
+        const auto pointInCustom = customWaveform.getLocalPoint (this, pointInEditor).toFloat();
+        if (! customWaveform.acceptsFragmentDropAt (pointInCustom))
+            return false;
+
+        customWaveform.acceptFragmentDrop (std::move (source), sliceIndex, pointInCustom.x);
+        layoutCustomWaveform();
+        processor.selectCustomBreak (true);
+        waveform.setSelected (false);
+        customWaveform.setSelected (true);
+        return true;
+    };
+    waveform.onFragmentDragged = [this] (BreakData::Ptr source, int sliceIndex, juce::Point<int> pointInTop)
+    {
+        const auto clearIncoming = [this]
+        {
+            customWaveform.clearIncomingFragment();
+            layoutCustomWaveform();
+            return false;
+        };
+
+        if (source == nullptr)
+            return clearIncoming();
+
+        auto* top = getTopLevelComponent();
+        if (top == nullptr || ! customWaveform.isVisible())
+            return clearIncoming();
+
+        const auto pointInEditor = getLocalPoint (top, pointInTop);
+        if (! customWaveform.getBounds().contains (pointInEditor))
+            return clearIncoming();
+
+        auto pointInCustom = customWaveform.getLocalPoint (this, pointInEditor).toFloat();
+        if (! customWaveform.acceptsFragmentDropAt (pointInCustom))
+            return clearIncoming();
+
+        customWaveform.setIncomingFragment (source, sliceIndex, pointInCustom.x);
+        // The display grows to make room for the hovering fragment; re-resolve the
+        // insertion point against the resized bounds so the ghost stays under the mouse.
+        const auto previousBounds = customWaveform.getBounds();
+        layoutCustomWaveform();
+        if (customWaveform.getBounds() != previousBounds)
+        {
+            pointInCustom = customWaveform.getLocalPoint (this, pointInEditor).toFloat();
+            customWaveform.setIncomingFragment (std::move (source), sliceIndex, pointInCustom.x);
+        }
+        return true;
+    };
+
+    customWaveform.setCompactMode (true);
+    customWaveform.setStatusMessage ("Drag fragments from the waveform above");
+    customWaveform.setVisible (false);
+    addAndMakeVisible (customWaveform);
+    customWaveform.onArrangementChanged = [this] (const std::vector<int>& order)
+    {
+        processor.setCustomArrangement (order);
+        layoutCustomWaveform();
+    };
+    customWaveform.onSelected = [this]
+    {
+        processor.selectCustomBreak (true);
+        waveform.setSelected (false);
+        customWaveform.setSelected (true);
+    };
 
     addAndMakeVisible (spectrum);
     addAndMakeVisible (eqLamp);
@@ -743,11 +855,11 @@ DrumBreakerEditor::DrumBreakerEditor (DrumBreakerProcessor& p)
         processor.setModWheelFromUI (0.0f);
         modWheel.setValueFromController (0.0f);
     };
-    modPad.setTooltip ("Modulation pad: drag horizontally for cutoff, vertically for resonance");
+    modPad.setTooltip ("X = cutoff, Y = resonance. Center (0, 0) bypasses the filter; double-click the handle to recenter");
     modPad.setAxisNames ("CUTOFF", "RESO");
 
     addAndMakeVisible (keyboard);
-    keyboard.setTooltip ("Hold a key to loop the full arrangement; release to stop. C5 plays at the loaded pitch");
+    keyboard.setTooltip ("FL-style typing: Q = C5 (middle C), Z = C4, S = C#4. Hold to loop; release to stop");
     keyboard.setAvailableRange (36, 84);
     keyboard.setLowestVisibleKey (36);
     keyboard.setOctaveForMiddleC (5);
@@ -764,9 +876,24 @@ DrumBreakerEditor::DrumBreakerEditor (DrumBreakerProcessor& p)
     activationButton.setTooltip ("Open DrumBreaker license activation");
     activationButton.onClick = [this] { activationPanel.showActivation(); };
     addAndMakeVisible (activationButton);
-    activationPanel.onDismiss = [this] { activationButton.grabKeyboardFocus(); };
+    activationPanel.onDismiss = [this]
+    {
+        tryStartLogoIntro();
+        if (! logoIntro.isVisible())
+            keyboard.grabKeyboardFocus();
+    };
+    activationPanel.onActivated = [this] { logoIntroWithSound = true; };
     addChildComponent (activationPanel);
     activationPanel.setBounds (getLocalBounds());
+    addChildComponent (logoIntro);
+    logoIntro.onFinished = [this] (const juce::String& error)
+    {
+        if (error.isNotEmpty())
+            statusLabel.setText ("Logo intro: " + error, juce::dontSendNotification);
+        keyboard.setEnabled (processor.isLicensed());
+        if (isShowing() && ! activationPanel.isVisible())
+            keyboard.grabKeyboardFocus();
+    };
 
     breakButton.setTooltip ("Break the sample into fragments at every detected transient");
     breakButton.onClick = [this]
@@ -784,7 +911,20 @@ DrumBreakerEditor::DrumBreakerEditor (DrumBreakerProcessor& p)
     };
     addAndMakeVisible (restoreButton);
 
-    playButton.setTooltip ("Hold to loop the full arrangement at C5 pitch; release to stop");
+    newBreakButton.setTooltip ("Create a second arrangement by dragging fragments from the original waveform");
+    newBreakButton.onClick = [this]
+    {
+        if (! processor.createCustomBreak())
+            return;
+        refreshFromProcessor();
+        customWaveform.setVisible (true);
+        customWaveform.setSelected (true);
+        waveform.setSelected (false);
+        resized();
+    };
+    addAndMakeVisible (newBreakButton);
+
+    playButton.setTooltip ("Hold to loop the selected arrangement at C5 pitch; release to stop");
     playButton.setTriggeredOnMouseDown (true);
     playButton.onStateChange = [this]
     {
@@ -812,11 +952,31 @@ DrumBreakerEditor::DrumBreakerEditor (DrumBreakerProcessor& p)
     presetAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
         processor.apvts, params::filterPreset, presetBox);
 
-    filterTypeBox.setTooltip ("Filter shape");
-    filterTypeBox.addItemList ({ "Low Pass", "Band Pass", "High Pass", "Notch" }, 1);
+    filterTypeBox.setTooltip ("Automated filter preset: one low-to-high-to-low sweep per selected arrangement");
+    filterTypeBox.addItemList ({ "Select preset...", "Low Pass", "Band Pass", "High Pass" }, 1);
     addAndMakeVisible (filterTypeBox);
-    filterTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
-        processor.apvts, params::filterType, filterTypeBox);
+    filterMotionAttachment = std::make_unique<juce::ParameterAttachment> (
+        *processor.apvts.getParameter (params::filterMotion), [this] (float value)
+        {
+            const auto motion = (ToneStack::FilterMotion) (int) value;
+            const int item = motion == ToneStack::FilterMotion::lowPassSweep ? 2
+                : motion == ToneStack::FilterMotion::bandPassSweep ? 3
+                : motion == ToneStack::FilterMotion::highPassSweep ? 4 : 1;
+            filterTypeBox.setSelectedId (item, juce::dontSendNotification);
+        }, nullptr);
+    filterTypeBox.onChange = [this]
+    {
+        const auto motion = filterMotionForPreset (filterTypeBox.getSelectedId() - 1);
+        if (motion != ToneStack::FilterMotion::none)
+        {
+            auto* mix = processor.apvts.getParameter (params::filterMix);
+            mix->beginChangeGesture();
+            mix->setValueNotifyingHost (1.0f);
+            mix->endChangeGesture();
+        }
+        filterMotionAttachment->setValueAsCompleteGesture ((float) motion);
+    };
+    filterMotionAttachment->sendInitialUpdate();
 
     for (auto* k : { &pitchKnob, &sensitivityKnob, &outputKnob,
                      &driveKnob, &mixKnob, &reverbKnob })
@@ -834,13 +994,20 @@ DrumBreakerEditor::DrumBreakerEditor (DrumBreakerProcessor& p)
     juce::MessageManager::callAsync ([safeThis]
     {
         if (safeThis != nullptr && safeThis->isShowing())
+        {
             safeThis->activationPanel.showIfUnverified();
+            safeThis->tryStartLogoIntro();
+            if (! safeThis->activationPanel.isVisible() && ! safeThis->logoIntro.isVisible())
+                safeThis->keyboard.grabKeyboardFocus();
+        }
     });
 }
 
 DrumBreakerEditor::~DrumBreakerEditor()
 {
     stopTimer();
+    logoIntro.dismiss();
+    keyboard.focusLost (juce::Component::focusChangedDirectly);
     exportWorker.removeAllJobs (true, -1);
     processor.removeChangeListener (this);
     hints.removeChangeListener (this);
@@ -848,13 +1015,49 @@ DrumBreakerEditor::~DrumBreakerEditor()
     setLookAndFeel (nullptr);
 }
 
+bool DrumBreakerEditor::keyPressed (const juce::KeyPress& key)
+{
+    if (! processor.isLicensed() || activationPanel.isVisible() || logoIntro.isVisible()
+        || dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr)
+        return false;
+    return keyboard.keyPressed (key);
+}
+
+bool DrumBreakerEditor::keyStateChanged (bool isKeyDown)
+{
+    if (! processor.isLicensed() || activationPanel.isVisible() || logoIntro.isVisible()
+        || dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr)
+    {
+        keyboard.focusLost (juce::Component::focusChangedDirectly);
+        return false;
+    }
+    return keyboard.keyStateChanged (isKeyDown);
+}
+
+void DrumBreakerEditor::visibilityChanged()
+{
+    if (! isShowing())
+    {
+        logoIntro.dismiss();
+        logoIntroAttempted = false;
+    }
+}
+
 //==============================================================================
 void DrumBreakerEditor::refreshFromProcessor()
 {
     auto d = processor.getBreakData();
+    auto custom = processor.getCustomBreakData();
 
     waveform.setData (d);
     waveform.setBpm (processor.getDetectedBpm());
+    waveform.setSelected (! processor.isCustomBreakSelected());
+    customWaveform.setData (custom);
+    customWaveform.setBpm (processor.getDetectedBpm());
+    customWaveform.setVisible (custom != nullptr);
+    customWaveform.setSelected (processor.isCustomBreakSelected());
+    newBreakButton.setEnabled (d != nullptr && processor.hasBrokenSample() && custom == nullptr);
+    resized();
 
     if (d != nullptr)
         statusLabel.setText (d->name + "  |  " + juce::String ((int) d->arrangement.size()) + " fragments",
@@ -876,29 +1079,69 @@ void DrumBreakerEditor::changeListenerCallback (juce::ChangeBroadcaster* source)
     refreshFromProcessor();
 }
 
+void DrumBreakerEditor::tryStartLogoIntro()
+{
+    if (logoIntroAttempted || processor.hasPlayedLogoIntro() || ! isShowing() || ! processor.isLicensed()
+        || activationPanel.isVisible())
+        return;
+    logoIntroAttempted = true;
+    processor.markLogoIntroPlayed();
+    keyboard.focusLost (juce::Component::focusChangedDirectly);
+    const auto result = logoIntro.start (logoIntroWithSound);
+    logoIntroWithSound = false;
+    if (result.failed())
+    {
+        statusLabel.setText ("Logo intro: " + result.getErrorMessage(), juce::dontSendNotification);
+        keyboard.grabKeyboardFocus();
+    }
+}
+
 void DrumBreakerEditor::timerCallback()
 {
+    if (! isShowing())
+    {
+        logoIntro.dismiss();
+        logoIntroAttempted = false;
+    }
     const bool licensed = processor.isLicensed();
+    if (! licensed && logoIntro.isVisible())
+        logoIntro.dismiss();
+    tryStartLogoIntro();
     activationButton.setLicenseVerified (licensed);
     playButton.setEnabled (licensed);
-    keyboard.setEnabled (licensed);
+    keyboard.setEnabled (licensed && ! logoIntro.isVisible());
+    if (! licensed || ! hasKeyboardFocus (true) || activationPanel.isVisible() || logoIntro.isVisible()
+        || dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr)
+        keyboard.focusLost (juce::Component::focusChangedDirectly);
     if (! licensed && playButtonHeld)
     {
         playButtonHeld = false;
         processor.triggerPreviewOff (previewNote);
     }
-    const auto exportData = processor.getBreakData();
+    const auto exportData = processor.isCustomBreakSelected() ? processor.getCustomBreakData()
+                                                               : processor.getBreakData();
+    layoutCustomWaveform();
     exportButton.setEnabled (licensed && ! exporting && exportData != nullptr && exportData->audio != nullptr
                             && exportData->totalLength > 0);
     if (exportMenu != nullptr && ! exportMenu->isVisible())
         exportMenu.reset();
-    waveform.setPlayhead (processor.getPlayheadNormalised());
+    if (processor.isCustomBreakSelected())
+    {
+        waveform.setPlayhead (0.0f);
+        customWaveform.setPlayhead (processor.getPlayheadNormalised());
+    }
+    else
+    {
+        waveform.setPlayhead (processor.getPlayheadNormalised());
+        customWaveform.setPlayhead (0.0f);
+    }
     pitchWheel.setValueFromController (processor.getPitchWheelSemitones());
     modWheel.setValueFromController (processor.getModWheelAmount());
     const bool filterEnabled = processor.apvts.getRawParameterValue (params::filterEnabled)->load() >= 0.5f;
     const int filterMotion = (int) processor.apvts.getRawParameterValue (params::filterMotion)->load();
-    modPad.setLiveFilterValues (processor.getLiveFilterCutoff(), processor.getLiveFilterResonance(), filterEnabled);
-    filterTypeBox.setEnabled (filterEnabled && filterMotion != 1 && filterMotion != 2);
+    modPad.setLiveFilterValues (processor.getLiveFilterCutoff(), processor.getLiveFilterResonance(), filterEnabled,
+                               filterMotion != 0 || processor.getModWheelAmount() > 0.0f);
+    filterTypeBox.setEnabled (filterEnabled);
     driveKnob.setEnabled (filterEnabled);
     mixKnob.setEnabled (filterEnabled);
     driveKnob.setAlpha (filterEnabled ? 1.0f : 0.35f);
@@ -913,7 +1156,9 @@ void DrumBreakerEditor::showExportMenu()
         activationPanel.showActivation();
         return;
     }
-    if (exporting || ! processor.hasSample())
+    const auto activeData = processor.isCustomBreakSelected() ? processor.getCustomBreakData()
+                                                               : processor.getBreakData();
+    if (exporting || activeData == nullptr || activeData->totalLength <= 0)
         return;
     const juce::Component::SafePointer<DrumBreakerEditor> safeThis (this);
     exportMenu = std::make_unique<ExportMenu> (exportButton,
@@ -1038,7 +1283,6 @@ void DrumBreakerEditor::loadFile (const juce::File& file)
 
     if (processor.loadSampleFile (file, error))
     {
-        processor.breakSample();
         refreshFromProcessor();
         hintLabel.setText ("Loaded " + file.getFileName(), juce::dontSendNotification);
     }
@@ -1051,6 +1295,8 @@ void DrumBreakerEditor::loadFile (const juce::File& file)
 
 bool DrumBreakerEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
+    if (logoIntro.isVisible())
+        return false;
     for (const auto& f : files)
         if (juce::File (f).hasFileExtension ("wav;aif;aiff;flac;ogg;mp3"))
             return true;
@@ -1058,9 +1304,9 @@ bool DrumBreakerEditor::isInterestedInFileDrag (const juce::StringArray& files)
     return false;
 }
 
-void DrumBreakerEditor::fileDragEnter (const juce::StringArray&, int, int)
+void DrumBreakerEditor::fileDragEnter (const juce::StringArray&, int x, int y)
 {
-    waveform.setDragHighlight (true);
+    waveform.setDragHighlight (! customWaveform.isVisible() || ! customWaveform.getBounds().contains (x, y));
 }
 
 void DrumBreakerEditor::fileDragExit (const juce::StringArray&)
@@ -1068,9 +1314,12 @@ void DrumBreakerEditor::fileDragExit (const juce::StringArray&)
     waveform.setDragHighlight (false);
 }
 
-void DrumBreakerEditor::filesDropped (const juce::StringArray& files, int, int)
+void DrumBreakerEditor::filesDropped (const juce::StringArray& files, int x, int y)
 {
     waveform.setDragHighlight (false);
+
+    if (customWaveform.isVisible() && customWaveform.getBounds().contains (x, y))
+        return;
 
     for (const auto& f : files)
     {
@@ -1127,6 +1376,7 @@ void DrumBreakerEditor::paint (juce::Graphics& g)
 void DrumBreakerEditor::resized()
 {
     activationPanel.setBounds (getLocalBounds());
+    logoIntro.setBounds (getLocalBounds());
     auto area = getLocalBounds();
 
     auto footer = area.removeFromBottom (22);
@@ -1140,8 +1390,16 @@ void DrumBreakerEditor::resized()
     logo.setBounds (headerRow.withTrimmedTop (2).withSizeKeepingCentre (284, 38));
     statusLabel.setBounds (header.withLeft (logo.getRight() + 12).reduced (6, 0));
 
-    // The visualiser spans the full width but only about a sixth of the window height.
-    waveform.setBounds (area.removeFromTop (juce::jmax (110, area.getHeight() / 6)).reduced (10, 4));
+    // The original visualiser spans the full width but only about a sixth of the window height.
+    const int waveformHeight = juce::jmax (110, area.getHeight() / 6);
+    waveform.setBounds (area.removeFromTop (waveformHeight).reduced (10, 4));
+    if (customWaveform.isVisible())
+    {
+        area.removeFromTop (2);
+        const auto customRow = area.removeFromTop (waveformHeight);
+        customWaveform.setBounds (waveform.getX(), customRow.getY(), waveform.getWidth(), waveform.getHeight());
+        layoutCustomWaveform();
+    }
 
     auto keyboardArea = area.removeFromBottom (86).reduced (10, 6);
     auto wheelColumn = keyboardArea.removeFromLeft (96);
@@ -1171,8 +1429,8 @@ void DrumBreakerEditor::resized()
 
         auto centre = panel.withSizeKeepingCentre (juce::jmin (500, panel.getWidth()), 44);
         const int gap = 8;
-        const int buttonWidth = (centre.getWidth() - gap * 3) / 4;
-        for (auto* button : { &exportButton, &breakButton, &playButton, &restoreButton })
+        const int buttonWidth = (centre.getWidth() - gap * 4) / 5;
+        for (auto* button : { &exportButton, &breakButton, &playButton, &restoreButton, &newBreakButton })
         {
             button->setBounds (centre.removeFromLeft (buttonWidth));
             centre.removeFromLeft (gap);
@@ -1221,6 +1479,22 @@ void DrumBreakerEditor::resized()
         panel.removeFromBottom (6);
         modPad.setBounds (panel);
     }
+}
+
+void DrumBreakerEditor::layoutCustomWaveform()
+{
+    if (! customWaveform.isVisible() || waveform.getWidth() <= 0)
+        return;
+
+    customWaveform.setFixedPixelsPerSample (waveform.getPixelsPerSample());
+    const int maximumWidth = waveform.getWidth();
+    const int minimumWidth = juce::jmax (1, maximumWidth / 3);
+    auto customData = processor.getCustomBreakData();
+    const double length = (customData != nullptr ? (double) customData->totalLength : 0.0)
+                        + customWaveform.getIncomingLength();
+    const int preferredWidth = customWaveform.getPreferredContentWidth (length, minimumWidth, maximumWidth);
+    const int x = waveform.getX() + (maximumWidth - preferredWidth) / 2;
+    customWaveform.setBounds (x, waveform.getBottom() + 6, preferredWidth, waveform.getHeight());
 }
 
 } // namespace drumbreaker

@@ -42,6 +42,19 @@ public:
         return copy;
     }
 
+    Ptr withSliceAndArrangement (const Slice& slice, const std::vector<int>& newArrangement) const
+    {
+        Ptr copy = new BreakData();
+        copy->audio            = audio;
+        copy->sourceSampleRate = sourceSampleRate;
+        copy->name             = name;
+        copy->slices           = slices;
+        copy->slices.push_back (slice);
+        copy->arrangement      = newArrangement;
+        copy->rebuildTimeline();
+        return copy;
+    }
+
     void rebuildTimeline()
     {
         starts.clear();
@@ -86,7 +99,7 @@ public:
     void reset();
 
     /** Publishes a new snapshot. Safe to call from the message thread. */
-    void setData (BreakData::Ptr newData);
+    void setData (BreakData::Ptr newData, bool restartPlayback = false);
     BreakData::Ptr getData() const;
 
     void noteOn (int midiNote, float velocity);
@@ -142,6 +155,7 @@ private:
 
     std::atomic<float> pitchOffset { 0.0f };
     std::atomic<bool>  playing     { false };
+    std::atomic<bool>  restartRequested { false };
     std::atomic<float> playhead    { 0.0f };
     std::atomic<double> playbackPitchRatio { 1.0 };
 

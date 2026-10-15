@@ -58,8 +58,15 @@ public:
 
     /** Replaces the playback order (called by the waveform editor after a drag). */
     void setArrangement (const std::vector<int>& newArrangement);
+    void setCustomArrangement (const std::vector<int>& newArrangement);
+    bool createCustomBreak();
+    bool hasCustomBreak() const;
+    bool hasBrokenSample() const noexcept { return sampleBroken.load(); }
+    void selectCustomBreak (bool selected);
+    bool isCustomBreakSelected() const noexcept { return customBreakSelected.load(); }
 
-    BreakData::Ptr getBreakData() const { return engine.getData(); }
+    BreakData::Ptr getBreakData() const;
+    BreakData::Ptr getCustomBreakData() const;
 
     double getDetectedBpm() const noexcept { return detectedBpm.load(); }
     bool   hasSample() const;
@@ -83,6 +90,9 @@ public:
     OfflineExporter::Snapshot captureExportSnapshot() const;
     licensing::LicenseClient& getLicenseClient() noexcept { return licenseClient; }
     bool isLicensed() const noexcept { return licenseClient.isVerified(); }
+    /** The logo intro plays once per plugin instance; the flag is saved with the host project. */
+    bool hasPlayedLogoIntro() const noexcept { return logoIntroPlayed.load(); }
+    void markLogoIntroPlayed() noexcept { logoIntroPlayed.store (true); }
 
     juce::AudioProcessorValueTreeState apvts;
     juce::MidiKeyboardState keyboardState;
@@ -95,12 +105,23 @@ private:
     void updateToneStack();
     void clearLoadedSession();
     void publish (BreakData::Ptr newData);
+    void captureEffectSettings (std::vector<float>& destination) const;
+    void applyEffectSettings (const std::vector<float>& settings);
+    std::vector<juce::RangedAudioParameter*> getEffectParameters();
 
     juce::AudioFormatManager formatManager;
     licensing::LicenseClient licenseClient;
 
     BreakEngine engine;
     ToneStack   toneStack;
+
+    mutable juce::SpinLock arrangementLock;
+    mutable juce::CriticalSection effectSettingsLock;
+    BreakData::Ptr mainData, customData;
+    std::atomic<bool> customBreakSelected { false };
+    std::atomic<bool> sampleBroken { false };
+    std::atomic<bool> logoIntroPlayed { false };
+    std::vector<float> mainEffectSettings, customEffectSettings;
 
     juce::File   loadedFile;
     std::atomic<double> detectedBpm { 0.0 };

@@ -5,11 +5,30 @@ project(DrumBreaker VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# macOS: build for both Intel and Apple Silicon, deploy back to 10.13
-set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "" FORCE)
-set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "" FORCE)
+if(APPLE)
+    # macOS: build for both Intel and Apple Silicon, deploy back to 10.13
+    set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "" FORCE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "" FORCE)
+else()
+    unset(CMAKE_OSX_ARCHITECTURES CACHE)
+    unset(CMAKE_OSX_DEPLOYMENT_TARGET CACHE)
+endif()
 
 include(FetchContent)
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+
+if(WIN32)
+    FetchContent_Declare(WebView2SDK
+        URL https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.1901.177
+        URL_HASH SHA256=464360D5EEDCAE0E95B0A3FE13C74B496BC9B542980FF8ECEBD9FF7EA37CA39E
+        DOWNLOAD_NAME WebView2.zip
+        SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/Microsoft.Web.WebView2")
+    FetchContent_MakeAvailable(WebView2SDK)
+    set(JUCE_WEBVIEW2_PACKAGE_LOCATION "${CMAKE_BINARY_DIR}/_deps")
+    set(DRUMBREAKER_WEBVIEW_OPTIONS NEEDS_WEBVIEW2 TRUE)
+endif()
 
 # Copying into the system VST3 folder needs elevated rights on Windows, so it is opt-in.
 option(DRUMBREAKER_INSTALL_AFTER_BUILD "Copy the built plugin into the system plugin folders" OFF)
@@ -26,6 +45,7 @@ else()
 endif()
 
 juce_add_plugin(DrumBreaker
+    ${DRUMBREAKER_WEBVIEW_OPTIONS}
     COMPANY_NAME                "DrumBreaker Audio"
     BUNDLE_ID                   "com.drumbreakeraudio.drumbreaker"
     IS_SYNTH                    TRUE
@@ -40,6 +60,11 @@ juce_add_plugin(DrumBreaker
     PRODUCT_NAME                "Drum Breaker")
 
 juce_generate_juce_header(DrumBreaker)
+
+juce_add_binary_data(DrumBreakerIntroData
+    HEADER_NAME DrumBreakerIntroData.h
+    NAMESPACE DrumBreakerIntroData
+    SOURCES Assets/LogoIntro.html Assets/LogoIntro.mp4)
 
 target_sources(DrumBreaker PRIVATE
     Source/PluginProcessor.cpp
@@ -57,18 +82,21 @@ target_sources(DrumBreaker PRIVATE
     Source/UI/SpectrumDisplay.cpp
     Source/UI/XYPad.cpp
     Source/UI/ActivationPanel.cpp
+    Source/UI/LogoIntro.cpp
     Source/UI/HintBroadcaster.cpp)
 
 target_include_directories(DrumBreaker PRIVATE Source)
 
 target_compile_definitions(DrumBreaker PUBLIC
-    JUCE_WEB_BROWSER=0
+    JUCE_WEB_BROWSER=1
+    JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=$<BOOL:${WIN32}>
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1)
 
 target_link_libraries(DrumBreaker PRIVATE
+    DrumBreakerIntroData
     juce::juce_audio_utils
     juce::juce_audio_processors
     juce::juce_dsp
@@ -90,6 +118,9 @@ function(drumbreaker_link_credential_store target)
 endfunction()
 
 drumbreaker_link_credential_store(DrumBreaker)
+if(WIN32)
+    target_link_libraries(DrumBreaker PUBLIC juce::juce_webview2)
+endif()
 
 if(DRUMBREAKER_BUILD_TESTS)
     juce_add_console_app(AnalyzerTest PRODUCT_NAME "AnalyzerTest")
@@ -125,4 +156,5 @@ if(DRUMBREAKER_BUILD_TESTS)
         juce::juce_cryptography
         juce::juce_recommended_config_flags)
     add_test(NAME ProjectSessionState COMMAND SessionStateTest)
+    add_test(NAME LogoIntroUI COMMAND SessionStateTest --logo-intro-self-test)
 endif()
