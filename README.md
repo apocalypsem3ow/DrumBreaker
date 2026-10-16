@@ -1,4 +1,4 @@
-# Drum Breaker
+# DrumBreaker
 
 A VST3 / AU / Standalone drum-loop slicer built with JUCE 8. Drop in a break, it finds
 the tempo and the transients, chops the loop into fragments, and lets you re-arrange
@@ -18,6 +18,9 @@ them on a magnetic, snap-to-grid waveform playlist.
 - **Custom break display** - after BREAK, NEW BREAK reveals a horizontally centred display
   below the original, with the same height and an initial width of one third. It grows
   horizontally as fragments are added and stays centred when resized or reopened.
+- **RESTORE** returns only the original loaded sample to one whole, unbroken piece.
+  Existing NEW BREAK pieces, their order, and their effects stay unchanged. Click BREAK
+  again to re-slice the original and continue adding fragments to the same NEW BREAK.
 - **Magnetic fragment dragging** – drag a piece anywhere, even off the display; a dimmed ghost
   follows the mouse and the fragment snaps back into the nearest slot on release.
   Hovering a piece over the NEW BREAK display (including the first, empty drop) shows it
@@ -71,7 +74,7 @@ them on a magnetic, snap-to-grid waveform playlist.
   small center snap zone or double-left-click the handle to recenter, cancel filter
   motion, and clear mod-wheel modulation. Motion presets and the mod wheel can still
   activate filtering independently, and the pad follows their live values.
-- **Animated DRUM/BREAKER logo** retains its left-click full reset and offers a single
+- **Animated DrumBreaker logo** retains its left-click full reset and offers a single
   Restore to default... action on right-click. Both restore factory parameters and
   forget the sample. The separate by hidden audio credit opens hiddenaudiofx.com.
 - Emerald styling throughout with hover glow, styled tooltips and a hint strip that is also
@@ -110,7 +113,7 @@ WebView2 Runtime and an interactive desktop on Windows.
 
 ## Project Sessions
 
-Drum Breaker is registered as a synth/instrument, not a mixer effect. A newly created
+DrumBreaker is registered as a synth/instrument, not a mixer effect. A newly created
 instance starts with factory parameter values, no sample, an empty waveform and no BPM.
 The DAW saves each instrument instance's sample reference, slices, arrangement, parameters,
 and pitch/modulation-wheel values inside its own project state. Reopening that project
@@ -148,7 +151,8 @@ Export does not normalize, change live playback, or overwrite an existing file.
   or automatically insert a clip, so track selection is performed by dropping the file.
   Native drag/import behavior depends on the DAW and platform and must be checked there.
   These files remain under the user's application-data folder in
-  `Hidden Audio/Drum Breaker/Exports`; keep them if a DAW project references them.
+  `Hidden Audio/DrumBreaker/Exports`; keep them if a DAW project references them.
+  Previously exported files in the older, spaced product-name folder remain untouched.
 
 `AnalyzerTest --export-self-test` (CTest `ProcessedWavExport`) checks arrangement
 playback fidelity, pitch-adjusted duration, effects/tail output, float peaks, cancellation,
@@ -269,6 +273,27 @@ cmake -B build -DJUCE_PATH=/path/to/JUCE
 
 macOS builds are universal (x86_64 + arm64) with a 10.13 deployment target; the same
 source tree produces VST3, AU and Standalone on both platforms.
+
+### Windows installer
+
+Run `.\Packaging\BuildInstaller.ps1` with Inno Setup 6.3+ installed. The script
+builds the Release VST3 and standalone, verifies their x64 format and
+DrumBreaker / Hidden Audio metadata, checks Microsoft's signatures on the
+bundled runtime installers, and writes
+`dist\DrumBreaker-Setup-1.0.0-Windows-x64.exe`. It compiles setup without
+installing anything. Use `-SkipBuild` only with current Release binaries.
+
+Setup requires acceptance of the supplied [EULA](Packaging/EULA.rtf) and uses
+the supplied [icon](Assets/DrumBreakerIcon.ico). The standalone app embeds a
+PNG derived from that icon. The VST3 installs to Common Files\VST3\DrumBreaker.vst3;
+the optional standalone installs to Program Files\Hidden Audio\DrumBreaker.
+The plugin reports **Hidden Audio** as its vendor and **DrumBreaker** as its name.
+Manufacturer/plugin codes and the bundle ID remain unchanged for project compatibility.
+Existing exports and activation records are not moved or deleted.
+
+The output is unsigned unless separately code-signed before distribution;
+Windows may show an unknown-publisher warning. Validate installation and a fresh
+FL Studio plugin scan on a test machine before public release.
 
 ## Source layout
 

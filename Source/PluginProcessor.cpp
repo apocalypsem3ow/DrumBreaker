@@ -430,6 +430,9 @@ bool DrumBreakerProcessor::hasSample() const
 
 void DrumBreakerProcessor::publish (BreakData::Ptr newData)
 {
+    if (newData != nullptr)
+        newData->rebuildTimeline();
+
     BreakData::Ptr activeData;
     bool clearCustomSettings = false;
     {

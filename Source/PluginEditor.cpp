@@ -200,7 +200,7 @@ class ExportJob : public juce::ThreadPoolJob
 public:
     ExportJob (OfflineExporter::Snapshot settings, juce::File target,
                std::function<void(juce::Result)> completed)
-        : juce::ThreadPoolJob ("Drum Breaker WAV export"), snapshot (std::move (settings)),
+        : juce::ThreadPoolJob ("DrumBreaker WAV export"), snapshot (std::move (settings)),
           destination (std::move (target)), completion (std::move (completed)) {}
 
     JobStatus runJob() override
@@ -463,7 +463,7 @@ void EQLamp::timerCallback()
 
 ElectricLogo::ElectricLogo()
 {
-    setTitle ("DRUM/BREAKER");
+    setTitle ("DrumBreaker");
     credit.setFont (juce::Font (juce::FontOptions ("Bahnschrift", 9.0f, juce::Font::plain)), false);
     credit.setColour (juce::HyperlinkButton::textColourId, emerald::textDim);
     credit.setTooltip ("hiddenaudiofx.com");
@@ -479,7 +479,7 @@ void ElectricLogo::resized()
     juce::GlyphArrangement glyphs;
     glyphs.addLineOfText (juce::Font (juce::FontOptions ("Consolas", 25.0f,
                                                        juce::Font::bold | juce::Font::italic)),
-                          "DRUM/BREAKER", 0.0f, 0.0f);
+                          "DrumBreaker", 0.0f, 0.0f);
     lettering.clear();
     glyphs.createPath (lettering);
     const auto transform = lettering.getTransformToScaleToFit (10.0f, 6.0f,
@@ -493,21 +493,6 @@ void ElectricLogo::resized()
         juce::Path shape;
         glyphs.getGlyph (index).createPath (shape);
         shape.applyTransform (transform);
-
-        if (index == 4)
-        {
-            const auto bounds = shape.getBounds();
-            shape.clear();
-            shape.startNewSubPath (bounds.getRight(), bounds.getY());
-            shape.lineTo (bounds.getX() + bounds.getWidth() * 0.28f,
-                          bounds.getY() + bounds.getHeight() * 0.56f);
-            shape.lineTo (bounds.getCentreX(), bounds.getY() + bounds.getHeight() * 0.56f);
-            shape.lineTo (bounds.getX(), bounds.getBottom());
-            shape.lineTo (bounds.getRight() - bounds.getWidth() * 0.18f,
-                          bounds.getY() + bounds.getHeight() * 0.40f);
-            shape.lineTo (bounds.getCentreX(), bounds.getY() + bounds.getHeight() * 0.40f);
-            shape.closeSubPath();
-        }
 
         letterShapes.push_back (std::move (shape));
     }
@@ -539,7 +524,7 @@ void ElectricLogo::paint (juce::Graphics& graphics)
             graphics.saveState();
             graphics.addTransform (juce::AffineTransform::translation (
                 direction * fracture * (index % 2 == 0 ? 4.0f : -4.0f), direction * fracture * 2.5f));
-            const float stencilGap = index == 4 ? 0.0f : 0.45f;
+            const float stencilGap = 0.45f;
             const auto clip = half == 0 ? bounds.withBottom (shape.getBounds().getCentreY() - stencilGap)
                                         : bounds.withTop (shape.getBounds().getCentreY() + stencilGap);
             juce::Path clipShape;
@@ -769,7 +754,7 @@ DrumBreakerEditor::DrumBreakerEditor (DrumBreakerProcessor& p)
     waveform.onFragmentDropped = [this] (BreakData::Ptr source, int sliceIndex, juce::Point<int> pointInTop)
     {
         auto* top = getTopLevelComponent();
-        if (top == nullptr || ! customWaveform.isVisible())
+        if (top == nullptr || ! customWaveform.isVisible() || ! processor.hasBrokenSample())
             return false;
 
         const auto pointInEditor = getLocalPoint (top, pointInTop);
@@ -796,7 +781,7 @@ DrumBreakerEditor::DrumBreakerEditor (DrumBreakerProcessor& p)
             return false;
         };
 
-        if (source == nullptr)
+        if (source == nullptr || ! processor.hasBrokenSample())
             return clearIncoming();
 
         auto* top = getTopLevelComponent();
@@ -903,7 +888,7 @@ DrumBreakerEditor::DrumBreakerEditor (DrumBreakerProcessor& p)
     };
     addAndMakeVisible (breakButton);
 
-    restoreButton.setTooltip ("Restore the unbroken sample");
+    restoreButton.setTooltip ("Restore only the original sample; NEW BREAK pieces stay unchanged. Click BREAK again to add fragments");
     restoreButton.onClick = [this]
     {
         processor.restoreWholeSample();
@@ -1190,7 +1175,7 @@ void DrumBreakerEditor::exportToFolder()
             if (safeThis == nullptr || ! directory.isDirectory())
                 return;
             const auto base = directory.getChildFile (juce::File::createLegalFileName (snapshot.data->name))
-                .getFileNameWithoutExtension() + " - Drum Breaker";
+                .getFileNameWithoutExtension() + " - DrumBreaker";
             safeThis->startExport (snapshot, directory.getNonexistentChildFile (base, ".wav", false), false);
         });
 }
@@ -1206,7 +1191,7 @@ void DrumBreakerEditor::exportToPlaylist()
     if (snapshot.data == nullptr || exporting)
         return;
     const auto directory = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-        .getChildFile ("Hidden Audio").getChildFile ("Drum Breaker").getChildFile ("Exports");
+        .getChildFile ("Hidden Audio").getChildFile ("DrumBreaker").getChildFile ("Exports");
     const auto created = directory.createDirectory();
     if (created.failed())
     {
@@ -1214,7 +1199,7 @@ void DrumBreakerEditor::exportToPlaylist()
         return;
     }
     const auto base = directory.getChildFile (juce::File::createLegalFileName (snapshot.data->name))
-        .getFileNameWithoutExtension() + " - Drum Breaker";
+        .getFileNameWithoutExtension() + " - DrumBreaker";
     startExport (snapshot, directory.getNonexistentChildFile (base, ".wav", false), true);
 }
 

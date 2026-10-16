@@ -6,9 +6,9 @@ namespace drumbreaker
 
 ActivationPanel::ActivationPanel (licensing::LicenseClient& licenseClient) : client (licenseClient)
 {
-    setTitle ("Drum Breaker license activation");
+    setTitle ("DrumBreaker license activation");
     setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
-    titleLabel.setText ("DRUM/BREAKER", juce::dontSendNotification);
+    titleLabel.setText ("DrumBreaker", juce::dontSendNotification);
     titleLabel.setFont (juce::Font (juce::FontOptions ("Consolas", 23.0f, juce::Font::bold | juce::Font::italic)));
     titleLabel.setColour (juce::Label::textColourId, emerald::accentBright);
     subtitleLabel.setText ("License activation", juce::dontSendNotification);

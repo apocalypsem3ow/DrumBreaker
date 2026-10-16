@@ -1,10 +1,11 @@
-DRUM BREAKER by HIDDEN AUDIO
+DrumBreaker by Hidden Audio
 
 Windows 10/11, 64-bit VST3 instrument
 
 Close your DAW and the standalone app before installation or updating.
 The VST3 instrument installs to the system's Common Files\VST3 folder.
-Scan for new plugins in your DAW, then load Drum Breaker as an instrument.
+Scan for new plugins in your DAW, then load DrumBreaker as an instrument.
+The plugin vendor is Hidden Audio.
 The standalone app and desktop shortcut are optional installer selections.
 The logo intro uses Microsoft Edge WebView2. If its runtime is missing, setup
 downloads and installs it from Microsoft (internet access required).

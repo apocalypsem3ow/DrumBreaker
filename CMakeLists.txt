@@ -46,7 +46,9 @@ endif()
 
 juce_add_plugin(DrumBreaker
     ${DRUMBREAKER_WEBVIEW_OPTIONS}
-    COMPANY_NAME                "DrumBreaker Audio"
+    COMPANY_NAME                "Hidden Audio"
+    COMPANY_WEBSITE             "https://hiddenaudiofx.com"
+    ICON_BIG                    "Assets/DrumBreakerIcon.png"
     BUNDLE_ID                   "com.drumbreakeraudio.drumbreaker"
     IS_SYNTH                    TRUE
     NEEDS_MIDI_INPUT            TRUE
@@ -57,7 +59,7 @@ juce_add_plugin(DrumBreaker
     PLUGIN_MANUFACTURER_CODE    Dbkr
     PLUGIN_CODE                 Dbk1
     FORMATS                     VST3 AU Standalone
-    PRODUCT_NAME                "Drum Breaker")
+    PRODUCT_NAME                "DrumBreaker")
 
 juce_generate_juce_header(DrumBreaker)
 

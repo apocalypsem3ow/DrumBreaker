@@ -274,6 +274,10 @@ int main (int argc, char* argv[])
 
     DrumBreakerProcessor fresh (licensingOptions);
     defaults (fresh);
+    check (fresh.getName() == "DrumBreaker" && juce::String (JucePlugin_Name) == "DrumBreaker",
+           "processor and plugin metadata use the DrumBreaker product name");
+    check (juce::String (JucePlugin_Manufacturer) == "Hidden Audio",
+           "host-facing plugin vendor is Hidden Audio");
     {
         auto audio = std::make_shared<juce::AudioBuffer<float>> (1, 4000);
         for (int sample = 0; sample < audio->getNumSamples(); ++sample)
@@ -459,6 +463,87 @@ int main (int argc, char* argv[])
     projectA.setModWheelFromUI (0.45f);
     juce::MemoryBlock savedA;
     projectA.getStateInformation (savedA);
+
+    for (bool customSelected : { false, true })
+    {
+        licenseTest::FixtureStore restoreStore;
+        DrumBreakerProcessor restoreTarget (restoreStore.options());
+        check (restoreTarget.getLicenseClient().activate (licenseTest::key)
+                && licenseTest::waitForIdle (restoreTarget.getLicenseClient())
+                && restoreTarget.isLicensed(), "synthetic activation enables restore playback/export checks");
+        restoreTarget.setStateInformation (savedA.getData(), (int) savedA.getSize());
+        restoreTarget.selectCustomBreak (customSelected);
+        const auto original = restoreTarget.getBreakData();
+        const auto custom = restoreTarget.getCustomBreakData();
+        const auto customLength = custom->totalLength;
+        const auto customStarts = custom->starts;
+        restoreTarget.restoreWholeSample();
+        const auto whole = restoreTarget.getBreakData();
+        check (! restoreTarget.hasBrokenSample() && whole->audio == original->audio
+                && whole->slices.size() == 1 && whole->slices.front().start == 0
+                && whole->slices.front().end == original->audio->getNumSamples()
+                && whole->arrangement == std::vector<int> { 0 }
+                && whole->totalLength == original->audio->getNumSamples()
+                && whole->starts == std::vector<juce::int64> { 0 },
+               "RESTORE rebuilds the whole original waveform even when NEW BREAK is selected");
+        check (restoreTarget.getCustomBreakData() == custom
+                && custom->arrangement == std::vector<int> { 0, 0, 0 }
+                && custom->totalLength == customLength && custom->starts == customStarts
+                && restoreTarget.isCustomBreakSelected() == customSelected,
+               "RESTORE leaves NEW BREAK pieces, timeline, and display selection unchanged");
+        check (restoreTarget.captureExportSnapshot().data == (customSelected ? custom : whole),
+               "RESTORE keeps playback and export on the selected arrangement");
+
+        juce::MemoryBlock wholeState;
+        restoreTarget.getStateInformation (wholeState);
+        DrumBreakerProcessor reopened (licensingOptions);
+        reopened.setStateInformation (wholeState.getData(), (int) wholeState.getSize());
+        check (! reopened.hasBrokenSample()
+                && reopened.getBreakData()->totalLength == original->audio->getNumSamples()
+                && reopened.getCustomBreakData()->arrangement == custom->arrangement
+                && reopened.getCustomBreakData()->totalLength == customLength,
+               "saving after RESTORE preserves the whole original and existing NEW BREAK");
+
+        DrumBreakerEditor editor (restoreTarget);
+        std::vector<WaveformEditor*> displays;
+        for (int child = 0; child < editor.getNumChildComponents(); ++child)
+            if (auto* display = dynamic_cast<WaveformEditor*> (editor.getChildComponent (child)))
+                displays.push_back (display);
+        check (displays.size() == 2, "RESTORE keeps both waveform displays");
+        if (displays.size() == 2)
+        {
+            auto* sourceDisplay = displays[0];
+            auto* customDisplay = displays[1];
+            auto point = customDisplay->getBounds().getCentre();
+            check (customDisplay->isVisible()
+                    && ! sourceDisplay->onFragmentDragged (whole, 0, point)
+                    && ! sourceDisplay->onFragmentDropped (whole, 0, point)
+                    && customDisplay->getIncomingLength() == 0.0
+                    && restoreTarget.getCustomBreakData() == custom,
+                   "restored whole sample cannot be hovered or dropped into NEW BREAK before BREAK");
+
+            restoreTarget.breakSample();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+            const auto broken = restoreTarget.getBreakData();
+            check (restoreTarget.hasBrokenSample() && broken->totalLength == whole->totalLength
+                    && restoreTarget.getCustomBreakData() == custom,
+                   "BREAK rebuilds the original slices without replacing existing NEW BREAK pieces");
+            point = customDisplay->getBounds().getCentre();
+            check (sourceDisplay->onFragmentDropped (broken, 0, point)
+                    && restoreTarget.getCustomBreakData()->arrangement.size() == 4
+                    && restoreTarget.getCustomBreakData()->totalLength
+                        == customLength + broken->slices.front().length(),
+                   "BREAK allows more fragments to be added to the existing NEW BREAK");
+        }
+        restoreTarget.selectCustomBreak (false);
+        check (std::abs (restoreTarget.apvts.getRawParameterValue (params::eqMidGain)->load() - 6.0f) < 0.01f,
+               "RESTORE and BREAK preserve the original effect bank");
+        restoreTarget.selectCustomBreak (true);
+        check (std::abs (restoreTarget.apvts.getRawParameterValue (params::eqMidGain)->load() + 4.0f) < 0.01f
+                && (int) restoreTarget.apvts.getRawParameterValue (params::filterMotion)->load()
+                    == (int) ToneStack::FilterMotion::bandPassSweep,
+               "RESTORE and BREAK preserve NEW BREAK effects");
+    }
 
     DrumBreakerProcessor projectB (licensingOptions);
     defaults (projectB);

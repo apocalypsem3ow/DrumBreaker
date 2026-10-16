@@ -29,7 +29,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "Drum Breaker"; }
+    const juce::String getName() const override { return "DrumBreaker"; }
     bool acceptsMidi() const override  { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -51,7 +51,7 @@ public:
     /** Runs transient detection and replaces the current arrangement. */
     void breakSample();
 
-    /** Collapses the arrangement back to a single, unsliced fragment. */
+    /** Restores the original sample to one whole fragment without changing the custom break. */
     void restoreWholeSample();
 
     void resetToDefaults();

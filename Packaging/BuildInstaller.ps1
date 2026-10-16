@@ -9,9 +9,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $release = Join-Path $root 'build\DrumBreaker_artefacts\Release'
-$bundle = Join-Path $release 'VST3\Drum Breaker.vst3'
-$binary = Join-Path $bundle 'Contents\x86_64-win\Drum Breaker.vst3'
-$standalone = Join-Path $release 'Standalone\Drum Breaker.exe'
+$bundle = Join-Path $release 'VST3\DrumBreaker.vst3'
+$binary = Join-Path $bundle 'Contents\x86_64-win\DrumBreaker.vst3'
+$standalone = Join-Path $release 'Standalone\DrumBreaker.exe'
 $runtimeDirectory = Join-Path $root 'build\installer-dependencies'
 $runtime = Join-Path $runtimeDirectory 'vc_redist.x64.exe'
 $webViewRuntime = Join-Path $runtimeDirectory 'MicrosoftEdgeWebview2Setup.exe'
@@ -62,6 +62,17 @@ foreach ($path in @($binary, $standalone, (Join-Path $bundle 'Contents\Resources
 }
 Assert-X64Binary $binary
 Assert-X64Binary $standalone
+# JUCE's moduleinfo writer emits trailing commas, which Windows PowerShell rejects.
+$metadataJson = Get-Content -LiteralPath (Join-Path $bundle 'Contents\Resources\moduleinfo.json') -Raw
+$metadata = ($metadataJson -replace ',(\s*[}\]])', '$1') | ConvertFrom-Json
+if ($metadata.Name -cne 'DrumBreaker' -or $metadata.'Factory Info'.Vendor -cne 'Hidden Audio' -or
+    @($metadata.Classes | Where-Object { $_.Name -cne 'DrumBreaker' -or $_.Vendor -cne 'Hidden Audio' }).Count -gt 0) {
+    throw 'VST3 metadata must identify DrumBreaker by Hidden Audio. Rebuild the plugin before packaging.'
+}
+$versionInfo = (Get-Item -LiteralPath $standalone).VersionInfo
+if ($versionInfo.ProductName -cne 'DrumBreaker' -or $versionInfo.CompanyName -cne 'Hidden Audio') {
+    throw 'Standalone metadata must identify DrumBreaker by Hidden Audio. Rebuild the app before packaging.'
+}
 
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
 if (-not (Test-Path -LiteralPath $runtime)) {
